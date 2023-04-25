@@ -828,7 +828,7 @@ Poster_ra_sub_log <- transform_sample_counts(Poster_ra_sub, function(x=0) x+0.00
 # log transform
 Poster_ra_sub_log <- transform_sample_counts(Poster_ra_sub_log, function(x) log(x))
 Poster_ra_sub_melt_log <- psmelt(Poster_ra_sub_log)
-pdf("PosterFam_select_Afribiota_Log.pdf", width = 18, height = 8)
+pdf("Fam_select_Afribiota_Log.pdf", width = 18, height = 8)
 ggplot(Poster_ra_sub_melt_log, aes(x = Country, y = Abundance)) +
   geom_boxplot(aes(fill = Country), alpha = .3) +
   geom_point(colour = "black", size = 1.5) +
