@@ -1,6 +1,6 @@
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-```
+Script adapted from the DADA2 pipeline from @benjjneb
+https://benjjneb.github.io/dada2/tutorial_1_8.html
+
 Library
 ```{r}
 library(dada2)
