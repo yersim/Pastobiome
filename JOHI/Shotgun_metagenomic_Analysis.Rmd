@@ -1,3 +1,5 @@
+RMarkDown for the analysis of the shotgun metagenomic dataset, including the composition analysis with mOTUs, the metabolic pathways from Humann3 and the resistome from RGI.
+
 #Loading library
 ```{r, warning=FALSE}
 library(Biostrings)
