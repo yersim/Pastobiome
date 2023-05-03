@@ -1,5 +1,6 @@
 # Pastobiome: 
 Pastobiome project: the gut microbiota of agropastoralist and pastoralist children from Adadle region in the Somali Regional State of Ethiopia.
+Project realized in @VonaeschLabUNIL
 
 The population living in the Adadle region are consuming animal milk, especially camel milk, as well as starch-rich food such as wheat, maize, rice, sorghum and potato. Very little amount of meat, fish, vegetables and fruits are consummed by the children living in the region (Osman et al., 2020).
 
