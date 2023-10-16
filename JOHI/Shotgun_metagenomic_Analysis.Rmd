@@ -1619,3 +1619,91 @@ for (i in 1:length(list_dc)) {
 outcome_dc <- data.frame(out_pval, oth_out)
 rownames(outcome_dc) <- list_dc
 ```
+## Jaccard
+```{r}
+tax_rgi <- as.data.frame(aro_glm)
+rownames(tax_rgi) <- tax_rgi$fastqID
+aro_matrix <- tax_rgi[,8:207]
+dist_jaccard_aro <- vegan::vegdist(aro_matrix, by_rows = TRUE, diag = TRUE, method = "jaccard")
+pca_aro <- pcoa(dist_jaccard_aro)
+pca_aro_df <- as.data.frame(pca_aro$vectors)
+pca_aro_df <- cbind(md_reads, pca_aro_df)
+
+per_explained_aro <- 100*pca_aro$values$Relative_eig / sum(pca_aro$values$Relative_eig)
+per_explained_aro <- round(per_explained_aro[1:2], digits = 1)
+per_explained_aro[1:2]
+# Axis 1: 29.4%  Axis 2: 15.4%
+labs_aro <- c(glue("Axis1 [{per_explained_aro[1]}%]"),
+          glue("Axis2 [{per_explained_aro[2]}%]"))
+labs_aro
+pal_pcoa <- palbrew_all[c(69,66,67,68)]
+
+pdf("ARO_jaccard_pcoa.pdf")
+ggplot(pca_aro_df, aes(x=Axis.1, y=Axis.2, color=Lifestyle, shape=Lifestyle)) +
+  geom_point()+
+  scale_shape_manual(values=c(15,16,17,4)) +
+    scale_color_manual(values = pal_pcoa) +
+    scale_fill_manual(values = pal_pcoa) +
+  stat_ellipse(mapping= aes(fill = Lifestyle, color = Lifestyle),geom = "polygon", alpha = 0.01, show.legend = FALSE) +
+  xlab(labs_aro[1]) +
+  ylab(labs_aro[2]) +
+  labs(colour = "Lifestyle", shape = "Country") +
+  theme_bw()
+dev.off()
+pdf("ARO_corr.pdf")
+ggplot(pca_aro_df, aes(x=Total_reads, y=Axis.1)) +
+  geom_point(aes(col=Lifestyle, shape=Lifestyle)) +
+  geom_smooth(method=lm, se=FALSE) +
+  scale_shape_manual(values=c(15,16,17,4)) +
+  scale_color_manual(values = pal_pcoa) +
+  scale_fill_manual(values = pal_pcoa) +
+  theme_bw()
+dev.off()
+cor(pca_aro_df$Total_reads,pca_aro_df$Axis.1, method = "spearman")
+cor.test(pca_aro_df$Total_reads,pca_aro_df$Axis.1, method = "spearman")
+```
+
+```{r}
+dc_matrix <- as.data.frame(drugclass_glm[,c(1,8:36)])
+rownames(dc_matrix) <- dc_matrix$SampleID
+dc_matrix <- dc_matrix[,-1]
+dist_jaccard_dc <- vegan::vegdist(dc_matrix, by_rows = FALSE, diag = TRUE, method = "jaccard")
+pca_dc <- pcoa(dist_jaccard_dc)
+pca_dc_df <- as.data.frame(pca_dc$vectors)
+pca_dc_df <- pca_dc_df %>%
+  mutate(SampleID = rownames(pca_dc_df))
+pca_dc_df <- merge(md_reads, pca_dc_df, by="SampleID")
+
+per_explained_dc <- 100*pca_dc$values$Relative_eig / sum(pca_dc$values$Relative_eig)
+per_explained_dc <- round(per_explained_dc[1:2], digits = 1)
+per_explained_dc[1:2]
+# Axis 1: 36.5%  Axis 2: 28.8%
+labs_dc <- c(glue("Axis1 [{per_explained_dc[1]}%]"),
+          glue("Axis2 [{per_explained_dc[2]}%]"))
+labs_dc
+pal_pcoa <- palbrew_all[c(69,66,67,68)]
+
+pdf("DrugClass_jaccard_pcoa.pdf")
+ggplot(pca_dc_df, aes(x=Axis.1, y=Axis.2, color=Lifestyle, shape=Lifestyle)) +
+  geom_point()+
+  scale_shape_manual(values=c(15,16,17,4)) +
+    scale_color_manual(values = pal_pcoa) +
+    scale_fill_manual(values = pal_pcoa) +
+  stat_ellipse(mapping= aes(fill = Lifestyle, color = Lifestyle),geom = "polygon", alpha = 0.01, show.legend = FALSE) +
+  xlab(labs_aro[1]) +
+  ylab(labs_aro[2]) +
+  labs(colour = "Lifestyle", shape = "Country") +
+  theme_bw()
+dev.off()
+pdf("DrugClass_corr.pdf")
+ggplot(pca_dc_df, aes(x=Total_reads, y=Axis.1)) +
+  geom_point(aes(col=Lifestyle, shape=Lifestyle)) +
+  geom_smooth(method=lm, se=FALSE) +
+  scale_shape_manual(values=c(15,16,17,4)) +
+  scale_color_manual(values = pal_pcoa) +
+  scale_fill_manual(values = pal_pcoa) +
+  theme_bw()
+dev.off()
+cor(pca_dc_df$Total_reads,pca_dc_df$Axis.1, method = "spearman")
+cor.test(pca_dc_df$Total_reads,pca_dc_df$Axis.1, method = "spearman")
+```
