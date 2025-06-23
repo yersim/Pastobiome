@@ -1,0 +1,3821 @@
+---
+title: "WP1 - 94 samples"
+author: "Jazmine Mote"
+date: "2025-05-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The final (hopefully) analysis of all bacteria and has:
+- 
+
+# set wd, load libraires
+```{r}
+setwd("/Volumes/RECHERCHE/FAC/FBM/DMF/pvonaesc/default/D2c/Jazmine Mote")
+
+if(!requireNamespace("BiocManager")){
+  install.packages("BiocManager")
+}
+#BiocManager::install("phyloseq") # also microbiome
+
+library(data.table)
+library(readxl)
+library(tibble)
+library(tidyverse) # dyplr, tidyr & ggplot2
+library(stringr)
+library(phyloseq)
+library(randomcoloR)
+library(ggtext)
+library(microbiome)
+library(vegan)
+library(ggsignif)
+library(ComplexHeatmap)
+library(circlize) # heatmap colours
+library(microbiomeMarker) # for differential abundance
+```
+
+
+```{r}
+# write excel of final md 
+library(writexl)
+
+#as.data.frame(pastobiome_metadata)
+pastobiome_metadata <- pastobiome_metadata %>%
+  rownames_to_column(var = "SampleID")
+write_xlsx(pastobiome_metadata, "patobiome_md_94.xlsx")
+
+
+```
+
+# prepare phyloseq, calculate relative abundances
+## !!!!!! data filtered to n = 47 stunted, 47 non-stunted | 52 AP and 42 P !!!!!!!
+```{r}
+final_samples <- c("AP007C1", "AP013C1", "AP014C1", "AP017C2", "AP018C1", # AP stunted
+                   "AP018C2", "AP022C1", "AP026C1", "AP040C1", "AP049C1",
+                   "AP050C1", "AP066C1", "AP066C2", "AP069C1", "AP077C1",
+                   "AP078C1", "AP091C1", "AP094C1", "AP124C1", "AP132C1", 
+                   "AP133C1", "AP133C2", "AP138C1", "AP141C1", "AP148C1", "AP151C1", 
+                   "AP006C1", "AP023C1", "AP034C1", "AP041C1", "AP052C1", # AP not stunted
+                   "AP055C1", "AP074C1", "AP081C1", "AP084C1", "AP092C1", 
+                   "AP096C1", "AP109C1", "AP111C1", "AP116C1", "AP120C1",
+                   "AP123C1", "AP125C1", "AP127C1", "AP130C1", "AP131C1",
+                   "AP137C1", "AP143C1", "AP144C1", "AP154C1", "AP159C1", "AP035C1",
+                   "P002C1", "P007C1", "P020C1", "P032C3", "P038C2", # P stunted
+                   "P052C1", "P052C2", "P057C1", "P060C1", "P070C1",
+                   "P076C1", "P095C1", "P097C1", "P102C2", "P108C1",
+                   "P109C2", "P111C1", "P115C1", "P121C1", "P128C1", "P099C1",
+                   "P003C1", "P003C2", "P014C1", "P016C1", "P016C2", # P not stunted
+                   "P017C1", "P042C1", "P044C1", "P044C2", "P046C2",
+                   "P054C1", "P056C1", "P056C2", "P068C1", "P073C1",
+                   "P073C2", "P073C3", "P075C1", "P082C1", "P103C1", "P123C2")
+
+stun_colours <- c("Stunted" = "lightgoldenrod2", "Not Stunted" = "mediumaquamarine")
+  
+group_colours <- c("Pastoralist" = "salmon", "Agro-Pastoralist" = "cornflowerblue")
+
+caz_fam_cols <- c("Glycoside hydrolases" = "#88CCEE",
+              "Glycosyltransferases" = "#CC6677",
+              "Carbohydrate binding modules" = "#DDCC77",
+              "Carbohydrate esterases" = "#117733",
+              "Auxiliary activities" = "#661100",
+              "Polysaccharide lyases" = "#44AA99")
+```
+
+###-----------------------------------ALL MAGs----------------------------------
+
+Load data - for final report I have YERS23-2_dRep_Widb → dereplicated MAGs of the whole dataset (ALL SPECIES) and I can use this to create a new abundance plot if I want
+
+split samples to my chosen ones before looking at GH differences
+```{r}
+# list of all organisms found in ALL samples, and # that are found in each sample (for relative abundances etc.)
+metaphlan <- fread("./DATA/PASTOBIOME_metaphlan_abs_new.txt") 
+
+# final, clean version PASTOBIOME metadata,  sample IDs should match the MAGs and have all the info needed on the samples
+pastobiome_metadata <- as.data.frame(read_xlsx('./DATA/Pastobiome_metadata_final.xlsx'))
+
+# change "stunting" and "wasting" to "stunted/not stunted" & "wasted/not wasted"
+pastobiome_metadata <- pastobiome_metadata %>%
+  mutate(stunting = ifelse(stunting == "No", "Not Stunted", 
+                           ifelse(stunting == "Yes", "Stunted", stunting)))
+pastobiome_metadata <- pastobiome_metadata %>%
+  mutate(wasting_st = ifelse(wasting_st == "No", "Not Wasted", 
+                           ifelse(wasting_st == "Yes", "Wasted", wasting_st)))
+# filter
+pastobiome_metadata <- pastobiome_metadata %>%
+  filter(SampleID %in% final_samples) %>%
+  column_to_rownames(var = "SampleID") %>%
+  select(group, gender, age_group, stunting, hfaz, wasting_st, wfaz, wfhz)
+```
+
+###---------------------------------Phyloseq------------------------------------
+Making a tax_table
+```{r}
+# make a taxonomy table from PASTOBIOME_metaphlan_abs_new.txt
+tax_table <- fread("./DATA/PASTOBIOME_metaphlan_abs_new.txt")
+
+colnames(tax_table) <- str_remove(colnames(tax_table), "_metaphlan4")
+
+# fix names & filter for my samples
+tax_table <- tax_table %>%
+  rename_with(~ case_when(
+    . == "AP11C1" ~ "AP011C1",
+    . == "AP12C1" ~ "AP012C1",
+    . == "AP35C1" ~ "AP035C1",
+    . == "AP42C1" ~ "AP042C1",
+    . == "P26C2"  ~ "P026C2",
+    . == "P32C1"  ~ "P032C1",
+    . == "P63C2"  ~ "P063C2",
+    . == "P99C1"  ~ "P099C1",
+    TRUE ~ .)) %>%
+  select(clade_name, clade_taxid, all_of(final_samples))
+```
+
+```{r}
+# make a new table with only taxonomy names, split clade_name into 8 parts based on the "" pattern
+tax_names <- as.data.frame(str_split_fixed(tax_table$clade_name, "\\|[p,c,o,f,g,s,t]__", 8))
+# remove "k__" from kingdom
+tax_names[,1] <- str_remove(tax_names[,1], "k__") 
+# take off the rows with incomplete taxonomy (these don't give enough taxonomic resolution for analysis)
+tax_names <- tax_names[-(which(tax_names[,8] == "")),] 
+# change column names (SGB = Species-level Genome Bins)
+colnames(tax_names) <- c("Kingdom", "Phylum", "Class","Order","Family","Genus","Species", "SGB")
+
+
+# add row names (name MAGs [metagenome-assembled genomes])
+tax_names <- tax_names %>%
+  mutate(MAGs = paste("MAG", seq(1:nrow(tax_names)), sep=""))
+# change row names to MAGs
+
+rownames(tax_names) <- tax_names$MAGs
+# list of MAGs
+MAGs_num <- tax_names$MAGs 
+# take off 8th and 9th columns from tax_names
+tax_names <- tax_names[,-c(8,9)]
+
+# create a taxonomy table, similar to one obtained using DADA2
+tax_names <- as.matrix(tax_names)
+
+#-------------------------------------------------------------------------------
+# PHYLOSEQ - set as the tax_table
+taxonomy_table <- tax_table(tax_names)
+```
+
+Making otu_table (abundance table) 
+```{r}
+# make & format abundance table using tax_table
+abun_table <- as.data.frame(cbind(str_split_fixed(tax_table$clade_name, "\\|[p,c,o,f,g,s,t]__", 8),tax_table))
+# remove "k__" from the Kingdom column
+abun_table[,1] <- str_remove(abun_table[,1], "k__")
+# remove rows with incomplete taxonomy (empty 8th column)
+abun_table <- abun_table[-(which(abun_table[,8] == "")),] 
+# assign MAGs_num as row names of abun_table
+rownames(abun_table) <- MAGs_num 
+
+# remove columns 1-10 to only have the abundance data
+abun_table <- abun_table[,-c(1:10)] 
+
+# we are now left with a table with columns that correlate to each samples
+# row names will correlate to the MAGs assigned to the bacteria in the tax_table
+
+#-------------------------------------------------------------------------------
+# PHYLOSEQ - set as the otu_table
+abun_table <- as.matrix(abun_table)
+class(abun_table) <- "numeric"
+abundance_table = otu_table(abun_table, taxa_are_rows = TRUE)
+```
+
+Metadata
+Are the row names of the metadata and the column name of the abundance table (OTUs) matching?
+```{r}
+# set metadata as phyloseq object
+past_meta <- sample_data(pastobiome_metadata)
+
+identical(rownames(past_meta), colnames(abundance_table)) # needs to be true
+
+# compare names
+setdiff(colnames(abundance_table), rownames(past_meta)) # which columns are in abun_table but not in past_meta
+setdiff(rownames(past_meta), colnames(abundance_table)) # which rows in past_meta but not in abun_table
+
+# reorder past_meta to be the same as the col names of abundance_table
+past_meta <- past_meta[colnames(abundance_table), ]
+
+# take 2
+identical(rownames(past_meta), colnames(abundance_table)) # needs to be true
+```
+
+```{r}
+# now that we have a tax_table and an otu_table, we can create our phyloseq
+physeq <- phyloseq(taxonomy_table, abundance_table, past_meta)
+
+physeq # 2030 taxa, 94 samples
+```
+------------------------------Relative Abundances-------------------------------
+
+Calculate
+```{r}
+physeq_rel <- transform_sample_counts(physeq, function(x) x / sum(x))
+```
+
+--------------------------------------------------------------------------------
+
+# relative abundance plots - all bacteria
+## family level
+```{r}
+# family colurs
+all_families <- unique(c(tax_table(physeq_rel)[, "Family"], tax_table(physeq_rel)[, "Family"]))
+
+num_fams <- length(all_families)
+
+fam_colours <- setNames(distinctColorPalette(num_fams), all_families)
+
+length(fam_colours) #should be 392
+```
+
+Bar plot - Taxonomic Composition
+```{r}
+# top 20 families for legend
+top20 <- psmelt(physeq_rel) %>%
+  group_by(Family) %>%
+  summarize(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+top20 <- top20$Family
+
+# Your custom colors for selected families
+custom_fam_colours <- c(
+  Lachnospiraceae = "lightskyblue",
+  Prevotellaceae = "lightgreen",
+  Bifidobacteriaceae = "tan",
+  Bacteroidaceae = "mediumpurple1",
+  Oscillospiraceae = "powderblue",
+  Enterobacteriaceae = "lightgoldenrod2",
+  Streptococcaceae = "firebrick",
+  Erysipelotrichaceae = "olivedrab",
+  Lactobacillaceae = "lightpink",
+  Veillonellaceae = "lemonchiffon2",
+  Eubacteriaceae = "lightsalmon",
+  Eubacteriales_unclassified = "salmon",
+  Clostridiaceae = "plum1",
+  FGB1765 = "darkorchid4",
+  Succinivibrionaceae = "steelblue",
+  Tannerellaceae = "gray57",
+  FGB1349 = "palevioletred1",
+  Akkermansiaceae = "khaki4",
+  Enterococcaceae = "darkorange1",
+  Odoribacteraceae = "goldenrod1")
+
+# override colours for top20 fams
+fam_colours[names(custom_fam_colours)] <- custom_fam_colours
+
+# Check length (should still be 392)
+length(fam_colours)
+
+colours_fam <- tibble(Family = all_families,
+                      Colours = fam_colours)
+
+fam_legend <- scale_fill_manual(values = fam_colours,
+                                     breaks = top20)
+
+#agglomerate to family level
+physeq_fam <- tax_glom(physeq_rel, taxrank = "Family")
+
+  
+fam_bar <- plot_bar(physeq_fam, fill = "Family") +
+  fam_legend +
+  theme_linedraw() + 
+    theme(axis.text.x = element_markdown(angle = 90, hjust = 1, size = 8), 
+    legend.position = "right",         
+    legend.direction = "vertical",     
+    legend.text = element_text(size = 10, face = "italic"), 
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.key.size = unit(1.5, "lines"),
+    plot.title = element_text(size = 12, face = "bold"),
+    strip.text = element_text(size = 10, face = "bold")) +
+  ggtitle("Relative abundance: Family level") +
+  ylab("Relative abundance") +
+  guides(fill = guide_legend(ncol = 1, title = "Top 20 Families")) + 
+  facet_wrap(~stunting, scales = "free_x") +
+  geom_bar(stat = "identity", position = "stack", color = NA) +
+  scale_x_discrete(labels = function(x) ifelse(grepl("^A", x), paste0("**", x, "**"), x))
+fam_bar
+```
+Can also separate into AP and P if needed
+
+### Wilcoxon tests
+```{r}
+df_fam <- psmelt(physeq_fam)
+```
+
+
+```{r}
+# stunting status test
+wilcox_abun_fam <- df_fam %>%
+  group_by(Family) %>%
+  summarise(p_value = tryCatch(wilcox.test(Abundance ~stunting)$p.value,
+                               error = function(e) NA)) %>%
+  mutate(p_adjust = p.adjust(p_value, method = "BH"))
+
+wilcox_abun_fam_sig <- wilcox_abun_fam %>%
+  filter(p_value < 0.05) # nothing significant for p.adjust!!
+```
+
+```{r}
+# community test
+wilcox_abun_fam_group <- df_fam %>%
+  group_by(Family) %>%
+  summarise(p_value = tryCatch(wilcox.test(Abundance ~ group)$p.value,
+                               error = function(e) NA)) %>%
+  mutate(p_adjust = p.adjust(p_value, method = "BH"))
+
+wilcox_abun_fam_group_sig <- wilcox_abun_fam_group %>%
+  filter(p_adjust < 0.05) # Moraxellaceae, Prevotellaceae
+```
+
+can perform the same with other md
+
+- subset data to have 
+AP (stunted and not stunted) and P (stunted and not stunted)
+stunted (both AP and P) and n_stunted (both AP and P)
+- then do wilcoxon tests and permanova
+## alpha-diversity
+```{r}
+physeq_spec <- tax_glom(physeq, "Species")
+
+alpha_div <- plot_richness(physeq_spec, x = "group",
+                               measures = c("Observed", "Shannon", "InvSimpson"),
+                               title = "Alpha-diversity by Species according to community",
+                               color = "group") +
+  geom_boxplot(aes(x = group, y = value, color = group, fill = group), alpha = 0.5) +
+  theme_linedraw() +
+  geom_signif(comparisons = list(c("Agro-Pastoralist", "Pastoralist")),
+              test = "wilcox.test",  # wilcoxon test
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = 0.2,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5,
+              colour = "black",
+              textcolour = "black") +
+  scale_color_manual(values = group_colours) + 
+  scale_fill_manual(values = group_colours) + 
+  theme(axis.text.x.bottom = element_blank(),
+        axis.text=element_text(), 
+        axis.title = element_text(face="bold"),
+        plot.title =element_text(face="bold",
+                                 margin = margin(t = 0, r = 0, b = 20, l = 0)), 
+        strip.text.x = element_text(face="bold"),
+        legend.position = "bottom", legend.title = element_blank()) +
+  xlab("Community") +
+  guides(fill = "none")
+
+alpha_div
+```
+### Alpha-diversity according to community in Stunted samples
+```{r}
+# subset physeq to only have stunted
+physeq_stunted <- subset_samples(physeq, stunting == "Stunted")
+physeq_stunted_spec <- tax_glom(physeq_stunted, "Species")
+
+alpha_div_com_stun <- plot_richness(physeq_stunted_spec, x = "group",
+                               measures = c("Observed", "Shannon", "InvSimpson"),
+                               color = "group") +
+  geom_boxplot(aes(x = group, y = value, color = group, fill = group), alpha = 0.5) +
+  theme_linedraw() +
+  geom_signif(comparisons = list(c("Agro-Pastoralist", "Pastoralist")),
+              test = "wilcox.test",  # wilcoxon test
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = 0.2,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5,
+              colour = "black",
+              textcolour = "black") +
+  scale_color_manual(values = group_colours) + 
+  scale_fill_manual(values = group_colours) + 
+  labs(title = "Alpha-diversity by species according to community",
+       subtitle = "Stunted samples") +
+  theme(axis.text.x.bottom = element_blank(),
+        axis.text=element_text(), 
+        axis.title = element_text(face="bold"),
+        plot.title =element_text(face="bold"), 
+        plot.subtitle = element_text(face = "bold.italic", colour = "lightgoldenrod3"),
+        strip.text.x = element_text(face="bold"),
+        legend.position = "bottom", legend.title = element_blank()) +
+  xlab("Community") +
+  guides(fill = "none")
+
+alpha_div_com_stun
+```
+### Alpha-diversity according to community in Not-Stunted samples
+```{r}
+# subset physeq to only have stunted
+physeq_not_stunted <- subset_samples(physeq, stunting == "Not Stunted")
+physeq_not_stunted_spec <- tax_glom(physeq_not_stunted, "Species")
+
+alpha_div_com_not_stun <- plot_richness(physeq_not_stunted_spec, x = "group",
+                               measures = c("Observed", "Shannon", "InvSimpson"),
+                               color = "group") +
+  geom_boxplot(aes(x = group, y = value, color = group, fill = group), alpha = 0.5) +
+  theme_linedraw() +
+  geom_signif(comparisons = list(c("Agro-Pastoralist", "Pastoralist")),
+              test = "wilcox.test",  # wilcoxon test
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = 0.2,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5,
+              colour = "black",
+              textcolour = "black") +
+  scale_color_manual(values = group_colours) + 
+  scale_fill_manual(values = group_colours) + 
+  labs(title = "Alpha-diversity by species according to community",
+       subtitle = "Non-stunted samples") +
+  theme(axis.text.x.bottom = element_blank(),
+        axis.text=element_text(), 
+        axis.title = element_text(face="bold"),
+        plot.title =element_text(face="bold"), 
+        plot.subtitle = element_text(face = "bold.italic", colour = "mediumaquamarine"),
+        strip.text.x = element_text(face="bold"),
+        legend.position = "bottom", legend.title = element_blank()) +
+  xlab("Community") +
+  guides(fill = "none")
+
+alpha_div_com_not_stun
+```
+
+Stunting
+```{r}
+alpha_div_stun <- plot_richness(physeq_spec, x = "stunting",
+                               measures = c("Observed", "Shannon", "InvSimpson"),
+                               title = "Alpha-diversity by species according to stunting status",
+                               color = "stunting") +
+  geom_boxplot(aes(x = stunting, y = value, color = stunting, fill = stunting), alpha = 0.5) +
+  theme_linedraw() +
+  geom_signif(comparisons = list(c("Stunted", "Not Stunted")),
+              test = "wilcox.test",  # wilcoxon test
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = 0.2,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5,
+              colour = "black",
+              textcolour = "black") +
+  scale_color_manual(values = stun_colours) + 
+  scale_fill_manual(values = stun_colours) + 
+  theme(axis.text.x.bottom = element_blank(),
+        axis.text=element_text(), 
+        axis.title = element_text(face="bold"),
+        plot.title =element_text(face="bold"), 
+        strip.text.x = element_text(face="bold"),
+        legend.position = "bottom", legend.title = element_blank()) +
+  xlab("Stunting Status") +
+  guides(fill = "none")
+
+alpha_div_stun
+```
+ns	Not significant	p > 0.05
+*	Significant	0.01 < p ≤ 0.05
+**	Very significant	0.001 < p ≤ 0.01
+***	Highly significant	p ≤ 0.001
+
+## beta-diversity
+### distance
+no need for tree
+```{r}
+# Bray-Curtis
+dist.bc <- distance(physeq, method = "bray")
+
+# sample names I need
+id_stunted <- sample_names(subset_samples(physeq, stunting == "Stunted"))
+id_not_stunted <- sample_names(subset_samples(physeq, stunting == "Not Stunted"))
+id_AP <- sample_names(subset_samples(physeq, group == "Agro-Pastoralist"))
+id_P <- sample_names(subset_samples(physeq, group == "Pastoralist"))
+```
+
+PERMANOVA - GROUP
+```{r}
+# permanova
+meta_pcoa = as.matrix(sample_data(physeq))
+meta_pcoa <- as.data.frame(meta_pcoa)
+permanova_all <- vegan::adonis2(dist.bc ~ group, data = meta_pcoa, permutations = 9999) # SIGNIFICANT
+permanova_all$"Pr(>F)" # p = 0.0091
+
+# only stunted samples
+dist.bc_stunted <- as.dist(as.matrix(dist.bc)[id_stunted, id_stunted])
+# all(id_stunted %in% labels(dist.bc_stunted))
+meta_stunted <- meta_pcoa[rownames(meta_pcoa) %in% id_stunted,]
+# permanova
+permanova_stunted <- vegan::adonis2(dist.bc_stunted~group, data = meta_stunted, permutations = 9999) # not significant
+permanova_stunted$"Pr(>F)" # p = 0.1526
+
+# only healthy samples
+dist.bc_not_stunted <- as.dist(as.matrix(dist.bc)[id_not_stunted, id_not_stunted])
+meta_not_stunted <- meta_pcoa[rownames(meta_pcoa) %in% id_not_stunted,]
+# permanova
+permanova_not_stunted <- vegan::adonis2(dist.bc_not_stunted~group, data = meta_not_stunted, permutations = 9999) # SIGNIFICANT
+permanova_not_stunted$"Pr(>F)" # p = 0.0013
+
+# correct for multiple testing - BH
+pvals_group <- c(all = permanova_all$"Pr(>F)"[1],
+                 stunted = permanova_stunted$"Pr(>F)"[1],
+                 healthy = permanova_not_stunted$"Pr(>F)"[1])
+
+pvals_group_adj <- p.adjust(pvals_group, method = "BH")
+pvals_group_adj
+```
+
+```{r}
+PCoA_permanova_not_stunted <- ordinate(physeq, "PCoA", distance = dist.bc_not_stunted)
+bc_pcoa_permanova_not_stunted <- plot_ordination(physeq, PCoA_permanova_not_stunted, type = "samples") +
+theme_linedraw() +
+ggtitle("PCoA (Bray-Curtis distance)") +
+  labs(subtitle = "Non-stunted samples") +
+scale_color_manual(values = group_colours) + 
+geom_point(aes(color = group), size = 2, stroke = 1) +
+guides(color = guide_legend(title = "Community")) + # legend guides
+theme(plot.title = element_text(size = 15, face = "bold"),
+      plot.subtitle = element_text(face = "bold.italic", colour = "mediumaquamarine"))
+bc_pcoa_permanova_not_stunted
+```
+
+PERMANOVA - STUNTING
+```{r}
+# permanova
+permanova_all_stun <- vegan::adonis2(dist.bc ~ stunting, data = meta_pcoa, permutations = 9999) # SIGNIFICANT
+permanova_all_stun$"Pr(>F)" # p = 0.0373
+
+# AP only
+dist.bc_AP <- as.dist(as.matrix(dist.bc)[id_AP, id_AP])
+meta_AP <- meta_pcoa[rownames(meta_pcoa) %in% id_AP,]
+# permanova
+permanova_AP <- vegan::adonis2(dist.bc_AP~stunting, data = meta_AP, permutations = 9999) # SIGNIFICANT
+permanova_AP$"Pr(>F)" # p = 0.0247
+
+# P only
+dist.bc_P <- as.dist(as.matrix(dist.bc)[id_P, id_P])
+meta_P <- meta_pcoa[rownames(meta_pcoa) %in% id_P,]
+# permanova
+permanova_P <- vegan::adonis2(dist.bc_P~stunting, data = meta_P, permutations = 9999) # SIGNIFICANT
+permanova_P$"Pr(>F)" # p = 0.0365
+
+# correct for multiple testing - BH
+pvals_stun <- c(all = permanova_all_stun$"Pr(>F)"[1],
+                 AP = permanova_AP$"Pr(>F)"[1],
+                 P = permanova_P$"Pr(>F)"[1])
+
+pvals_stun_adj <- p.adjust(pvals_stun, method = "BH")
+pvals_stun_adj
+```
+
+```{r}
+PCoA_permanova_all_stun <- ordinate(physeq, "PCoA", distance = dist.bc)
+bc_pcoa_permanova_all_stun <- plot_ordination(physeq, PCoA_permanova_all_stun, type = "samples") +
+theme_linedraw() +
+ggtitle("PCoA (Bray-Curtis distance)") +
+scale_color_manual(values = stun_colours) + 
+geom_point(aes(color = stunting), size = 2, stroke = 1) +
+guides(color = guide_legend(title = "Stunting status")) + # legend guides
+theme(plot.title = element_text(size = 15, face = "bold"))
+bc_pcoa_permanova_all_stun
+```
+
+PERMANOVA - WASTING
+```{r}
+# permanova
+permanova_all_wast <- vegan::adonis2(dist.bc ~ wasting_st, data = meta_pcoa, permutations = 9999)
+permanova_all_wast$"Pr(>F)" # p = 0.0534 - not significant
+```
+
+
+```{r}
+PCoA_bray <- ordinate(physeq, "PCoA", distance = dist.bc)
+bc_pcoa <- plot_ordination(physeq, PCoA_bray, type = "samples") +
+theme_linedraw() +
+scale_shape_manual(values = c("Stunted" = 16, "Not Stunted" = 17)) +
+ggtitle("PCoA (Bray-Curtis distance)") +
+scale_color_manual(values = group_colours) + 
+geom_point(aes(color = group, shape = stunting), size = 2, stroke = 1) +
+guides(color = guide_legend(title = "Community"),
+         shape = guide_legend(title = "Stunting Status")) + # legend guides
+theme(plot.title = element_text(size = 15, face = "bold"))
+bc_pcoa
+```
+
+```{r}
+# Jaccard
+dist.jac <- distance(physeq, method = "jaccard")
+
+PCoA_jac <- ordinate(physeq, "PCoA", distance = dist.jac)
+jac_pcoa <- plot_ordination(physeq, PCoA_jac,
+                           type = "samples", color = "group", shape = "stunting") +
+  theme_linedraw() +
+  scale_shape_manual(values = c("Stunted" = 16, "Not Stunted" = 17)) +
+  ggtitle("PCoA (Jaccard distance)") +
+  scale_color_manual(values = group_colours) + 
+  geom_point(aes(color = group, shape = stunting), size = 2, stroke = 1) +
+  guides(color = guide_legend(title = "Community"),
+         shape = guide_legend(title = "Stunting Status")) + # legend guides
+  theme(plot.title = element_text(size = 15, face = "bold"))
+jac_pcoa
+```
+
+PERMANOVA - GROUP
+```{r}
+# permanova
+meta_pcoa = as.matrix(sample_data(physeq))
+meta_pcoa <- as.data.frame(meta_pcoa)
+permanova_all <- vegan::adonis2(dist.jac ~ group, data = meta_pcoa, permutations = 9999) # SIGNIFICANT
+permanova_all$"Pr(>F)" # p = 0.0091
+
+# only stunted samples
+dist.jac_stunted <- as.dist(as.matrix(dist.jac)[id_stunted, id_stunted])
+# all(id_stunted %in% labels(dist.jac_stunted))
+meta_stunted <- meta_pcoa[rownames(meta_pcoa) %in% id_stunted,]
+# permanova
+permanova_stunted <- vegan::adonis2(dist.jac_stunted~group, data = meta_stunted, permutations = 9999) # not significant
+permanova_stunted$"Pr(>F)" # p = 0.1526
+
+# only healthy samples
+dist.jac_not_stunted <- as.dist(as.matrix(dist.jac)[id_not_stunted, id_not_stunted])
+meta_not_stunted <- meta_pcoa[rownames(meta_pcoa) %in% id_not_stunted,]
+# permanova
+permanova_not_stunted <- vegan::adonis2(dist.jac_not_stunted~group, data = meta_not_stunted, permutations = 9999) # SIGNIFICANT
+permanova_not_stunted$"Pr(>F)" # p = 0.0013
+
+# correct for multiple testing - BH
+pvals_group <- c(all = permanova_all$"Pr(>F)"[1],
+                 stunted = permanova_stunted$"Pr(>F)"[1],
+                 healthy = permanova_not_stunted$"Pr(>F)"[1])
+
+pvals_group_adj <- p.adjust(pvals_group, method = "BH")
+pvals_group_adj
+```
+PERMANOVA - STUNTING
+```{r}
+# permanova
+permanova_all_stun <- vegan::adonis2(dist.jac ~ stunting, data = meta_pcoa, permutations = 9999) # SIGNIFICANT
+permanova_all_stun$"Pr(>F)" # p = 0.0373
+
+# AP only
+dist.jac_AP <- as.dist(as.matrix(dist.jac)[id_AP, id_AP])
+meta_AP <- meta_pcoa[rownames(meta_pcoa) %in% id_AP,]
+# permanova
+permanova_AP <- vegan::adonis2(dist.jac_AP~stunting, data = meta_AP, permutations = 9999) # SIGNIFICANT
+permanova_AP$"Pr(>F)" # p = 0.0247
+
+# P only
+dist.jac_P <- as.dist(as.matrix(dist.jac)[id_P, id_P])
+meta_P <- meta_pcoa[rownames(meta_pcoa) %in% id_P,]
+# permanova
+permanova_P <- vegan::adonis2(dist.jac_P~stunting, data = meta_P, permutations = 9999) # SIGNIFICANT
+permanova_P$"Pr(>F)" # p = 0.0365
+
+# correct for multiple testing - BH
+pvals_stun <- c(all = permanova_all_stun$"Pr(>F)"[1],
+                 AP = permanova_AP$"Pr(>F)"[1],
+                 P = permanova_P$"Pr(>F)"[1])
+
+pvals_stun_adj <- p.adjust(pvals_stun, method = "BH")
+pvals_stun_adj
+```
+## genes
+## ALL CAZymes in all bacteria
+I   H A V E:
+YERS23-2.kegg-annotations.tsv - kegg annotations of ALL the genes found in ALL bacteria in ALL samples
+
+CAZymes_query.txt - list of the names of ALL the CAZymes found in ALL bacteria in ALL samples
+
+YERS23-2__insertcounts.lengthnorm.profile.cellab.profile.CAZymesfiltered - abundance of the CAZymes in the query in each sample
+
+YERS23-2.clstr.CAZymesfiltered.txt - origin of the abundances
+
+GH_CAZymes_query.txt - list of the names of all the glycoside hydrolases (GHs) found in ALL bacteria in ALL samples
+
+YERS23-2__insertcounts.lengthnorm.profile.cellab.profile.GHCAZymesfiltered - abundance of GHs in the query in each sample
+
+YERS23-2.clstr.GHCAZymesfiltered.txt - origin of the abundances
+
+### clean up the data
+```{r}
+# all genes found in all samples (1'549'426 genes)
+gene_annotations <- fread('./DATA/CAZymes/YERS23-2.kegg-annotations.tsv')
+
+# only keep the columns I need and filter to only CAZymes and remove "cazy:"s
+cazymes_annotations <- gene_annotations %>%
+  select(QUERY, KO, CAZY, ENZYME, PATHWAY, DESCRIPTION) %>%
+  filter(!is.na(CAZY)) %>%
+  mutate(CAZY = str_remove(CAZY, "cazy:")) 
+# take off middle "cazy:" too
+cazymes_annotations$CAZY <- str_replace_all(cazymes_annotations$CAZY, "cazy:", "")
+
+# make new column in cazymes to represent each family
+cazymes_annotations$FAMILY <- ifelse(grepl("GH", cazymes_annotations$CAZY), "Glycoside hydrolases",
+                  ifelse(grepl("GT", cazymes_annotations$CAZY), "Glycosyltransferases",
+                  ifelse(grepl("CBM", cazymes_annotations$CAZY), "Carbohydrate binding modules",
+                  ifelse(grepl("CE", cazymes_annotations$CAZY), "Carbohydrate esterases",
+                  ifelse(grepl("AA", cazymes_annotations$CAZY), "Auxiliary activities",
+                  ifelse(grepl("PL", cazymes_annotations$CAZY), "Polysaccharide lyases", NA))))))
+# take off NAs
+cazymes_annotations <- cazymes_annotations %>%
+  filter(!is.na(FAMILY)) %>%
+  mutate(CAZY = str_remove_all(CAZY, "NA---|---NA")) %>%
+  relocate(FAMILY, .after = CAZY)
+```
+
+
+```{r}
+# list of CAZymes
+cazyme_list <- fread("./DATA/CAZymes/CAZymes_query.txt", col.names = "QUERY")
+# filter to only have the same as cazyme_annotations 
+cazyme_list <- cazyme_list %>%
+  filter(QUERY %in% cazymes_annotations$QUERY)
+
+# must be TRUE, there should be the same number of CAZymes
+setequal(cazymes_annotations$QUERY, cazyme_list$QUERY)
+# which CAZyme is missing in CAZymes_query.txt?
+cazymes_annotations$QUERY[!cazymes_annotations$QUERY %in% cazyme_list$QUERY]
+# add it to cazyme_list
+cazyme_list <- rbind(cazyme_list, data.frame(QUERY = "YERS23-2_0000003507"))
+# take 2 
+setequal(cazymes_annotations$QUERY, cazyme_list$QUERY)
+```
+this gave us:
+- a list of all genes found in all samples
+- a subset containing ONLY CAZymes
+- a simple list of all the names(QUERY) of the CAZymes
+
+Add the abundances of the genes in every sample
+```{r}
+# CAZyme abundances
+cazymes_abundance <- fread('./DATA/CAZymes/YERS23-2__insertcounts.lengthnorm.profile.cellab.profile.CAZymesfiltered.txt')
+
+# change #reference to query and clean up columns
+colnames(cazymes_abundance)[1] <- "QUERY"
+colnames(cazymes_abundance) <- str_remove_all(colnames(cazymes_abundance), "YERS23-2_")
+colnames(cazymes_abundance) <- str_remove(colnames(cazymes_abundance), "_METAG.genecount.profile")
+# fix columns
+colnames(cazymes_abundance)[which(colnames(cazymes_abundance)=="AP11C1")] <- "AP011C1"
+colnames(cazymes_abundance)[which(colnames(cazymes_abundance)=="AP12C1")] <- "AP012C1"
+colnames(cazymes_abundance)[which(colnames(cazymes_abundance)=="AP35C1")] <- "AP035C1"
+colnames(cazymes_abundance)[which(colnames(cazymes_abundance)=="AP42C1")] <- "AP042C1"
+colnames(cazymes_abundance)[which(colnames(cazymes_abundance)=="P26C2")] <- "P026C2"
+colnames(cazymes_abundance)[which(colnames(cazymes_abundance)=="P32C1")] <- "P032C1"
+colnames(cazymes_abundance)[which(colnames(cazymes_abundance)=="P63C2")] <- "P063C2"
+colnames(cazymes_abundance)[which(colnames(cazymes_abundance)=="P99C1")] <- "P099C1"
+# filter for only final_samples
+cazymes_abundance <- cazymes_abundance %>%
+  select(1, all_of(final_samples))
+
+# making sure gene names all macth
+cazymes_abundance <- cazymes_abundance[match(cazyme_list$QUERY, cazymes_abundance$QUERY), ]
+setequal(cazyme_list$QUERY, cazymes_abundance$QUERY)
+setdiff(cazyme_list$QUERY, cazymes_abundance$QUERY)
+```
+this gave us:
+- the abundance of each CAZyme(QUERY, rows) gene in each sample(columns)
+
+which original MAG did each gene come from?
+```{r}
+cazymes_query_origin <- fread('./DATA/CAZymes/YERS23-2.clstr.CAZymesfiltered.txt')
+# rename columns
+colnames(cazymes_query_origin) <- c("QUERY","RepMem","Origin","Length","Stat")
+
+# take off "YERS23-2_"
+cazymes_query_origin <- cazymes_query_origin %>%
+  mutate(Origin = str_remove(Origin, "YERS23-2_"))
+
+# split with one list MetaG scaffold and one list MAGs
+cazymes_query_origin_mags <- cazymes_query_origin %>% 
+  filter(str_detect(Origin, "MAG"))
+cazymes_query_origin_scaff <- cazymes_query_origin %>% 
+  filter(str_detect(Origin, "METAG"))
+
+# add a column with the MAG name without the scaffold number
+cazymes_query_origin_mags <- cazymes_query_origin_mags %>%
+  mutate(as.data.frame(str_split_fixed(Origin, "\\-s", n = 2)))
+# delete scaffodd column
+cazymes_query_origin_mags <- cazymes_query_origin_mags[, -7]
+# rename column 6 to "MAGs"
+colnames(cazymes_query_origin_mags)[6] <- "MAGs"
+# move MAGs column next to QUERY so it's easier to see
+cazymes_query_origin_mags <- cazymes_query_origin_mags %>%
+  relocate(MAGs, .after = QUERY)
+
+# filter for only final_samples
+cazymes_query_origin_mags$SampleID <- sub("_.*", "", cazymes_query_origin_mags$Origin)
+# fix names in SampleID
+cazymes_query_origin_mags$SampleID[which(cazymes_query_origin_mags$SampleID=="P99C1")] <- "P099C1"
+cazymes_query_origin_mags$SampleID[which(cazymes_query_origin_mags$SampleID=="AP11C1")] <- "AP011C1"
+cazymes_query_origin_mags$SampleID[which(cazymes_query_origin_mags$SampleID=="AP12C1")] <- "AP012C1"
+cazymes_query_origin_mags$SampleID[which(cazymes_query_origin_mags$SampleID=="AP35C1")] <- "AP035C1"
+cazymes_query_origin_mags$SampleID[which(cazymes_query_origin_mags$SampleID=="AP42C1")] <- "AP042C1"
+cazymes_query_origin_mags$SampleID[which(cazymes_query_origin_mags$SampleID=="P26C2")] <- "P026C2"
+cazymes_query_origin_mags$SampleID[which(cazymes_query_origin_mags$SampleID=="P32C1")] <- "P032C1"
+cazymes_query_origin_mags$SampleID[which(cazymes_query_origin_mags$SampleID=="P63C2")] <- "P063C2"
+cazymes_query_origin_mags <- cazymes_query_origin_mags %>%
+  filter(SampleID %in% final_samples)
+# check all samples are there
+n_distinct(cazymes_query_origin_mags$SampleID)
+
+# how many MAGs have one or more CAZyme genes of interest?
+n_distinct(cazymes_query_origin_mags$MAGs) # 5824 MAGs have one or several CAZymes genes of interest in the 94 samples I am using
+```
+this gave us:
+- a list of all the CAZyme genes (QUERY), linked to every MAG and metagenome they originated from (origin) (cazymes_query_origin)
+- 2 subset of cazymes_query_origin, one filtered to only have the genes that came from MAGs and another only from METAG (metagenome) (..._mags & ..._scaff) (gene found in the sample and assigned to a function but you don’t know where it came from as it was not binned in a MAG)
+
+which bacterial taxa does each gene belong to (only genes assigned to MAGs, cazymes_query_origin_mags)
+```{r}
+# GTDB taxonomy table 
+mags_tax <- read.delim2('./DATA/CAZymes/YERS23-2.prok.genomes_2_gtdb.tsv')
+# take off "YERS23-2_"
+mags_tax <- mags_tax %>%
+  mutate(GENOME = str_remove(GENOME, "YERS23-2_"))
+# rename "GENOME" to "MAGs" to match cazymes_query_origin_mags
+colnames(mags_tax)[1] <- "MAGs"
+
+# filter for only final_samples
+mags_tax$SampleID <- sub("_.*", "", mags_tax$MAGs)
+# fix names
+mags_tax$SampleID[which(mags_tax$SampleID=="P99C1")] <- "P099C1"
+mags_tax$SampleID[which(mags_tax$SampleID=="AP11C1")] <- "AP011C1"
+mags_tax$SampleID[which(mags_tax$SampleID=="AP12C1")] <- "AP012C1"
+mags_tax$SampleID[which(mags_tax$SampleID=="AP35C1")] <- "AP035C1"
+mags_tax$SampleID[which(mags_tax$SampleID=="AP42C1")] <- "AP042C1"
+mags_tax$SampleID[which(mags_tax$SampleID=="P26C2")] <- "P026C2"
+mags_tax$SampleID[which(mags_tax$SampleID=="P32C1")] <- "P032C1"
+mags_tax$SampleID[which(mags_tax$SampleID=="P63C2")] <- "P063C2"
+mags_tax <- mags_tax %>%
+  filter(SampleID %in% final_samples) %>%
+  relocate(SampleID, .after = MAGs)
+# check for 94 samples
+n_distinct(mags_tax$SampleID)
+
+# split taxonomy
+tax_names <- str_split_fixed(mags_tax$GTDBTK_TAXONOMY, "\\;[p,c,o,f,g,s,t]__", 7)
+tax_names <- as.data.frame(tax_names)
+# remove "d__" from the first column
+tax_names[,1] <- str_remove(tax_names[,1], "d__")
+# change column names to taxonomy
+colnames(tax_names) <- c("Kingdom", "Phylum", "Class","Order","Family","Genus","Species")
+# aaaand combine
+mags_tax <- cbind(mags_tax, tax_names)
+```
+this gave us:
+- taxonomy of all the MAGs 
+
+MAGs QC 
+```{r}
+# MAGs quality
+mags_qc <- read.delim2('./DATA/CAZymes/YERS23-2.prok.genomes_2_quality.tsv')
+# take off "YERS23-2_"
+mags_qc <- mags_qc %>%
+  mutate(GENOME = str_remove(GENOME, "YERS23-2_"))
+# rename "GENOME" to "MAGs" to match cazymes_query_origin_mags
+colnames(mags_qc)[1] <- "MAGs"
+
+# filter for only final_samples
+mags_qc$SampleID <- sub("_.*", "", mags_qc$MAGs)
+# fix names
+mags_qc$SampleID[which(mags_qc$SampleID=="P99C1")] <- "P099C1"
+mags_qc$SampleID[which(mags_qc$SampleID=="AP11C1")] <- "AP011C1"
+mags_qc$SampleID[which(mags_qc$SampleID=="AP12C1")] <- "AP012C1"
+mags_qc$SampleID[which(mags_qc$SampleID=="AP35C1")] <- "AP035C1"
+mags_qc$SampleID[which(mags_qc$SampleID=="AP42C1")] <- "AP042C1"
+mags_qc$SampleID[which(mags_qc$SampleID=="P26C2")] <- "P026C2"
+mags_qc$SampleID[which(mags_qc$SampleID=="P32C1")] <- "P032C1"
+mags_qc$SampleID[which(mags_qc$SampleID=="P63C2")] <- "P063C2"
+mags_qc <- mags_qc %>%
+  filter(SampleID %in% final_samples) %>%
+  relocate(SampleID, .after = MAGs)
+# check for 94
+n_distinct(mags_qc$SampleID)
+
+# merge together by "MAGs" and keep only 1 SampleID
+mags_tax_qc <- mags_tax %>%
+  select(-SampleID) %>%
+  left_join(mags_qc, by = "MAGs") %>%
+  relocate(SampleID, .after = MAGs)
+# check for 94 for sanity
+n_distinct(mags_tax_qc$SampleID)
+```
+this gave us:
+- taxonomy of our MAGs, as well as the the QC of the MAGs when they were assembled
+
+Which MAGs have CAZymes?
+```{r}
+# filter
+mags_cazymes <- mags_tax_qc %>% filter(MAGs %in% cazymes_query_origin_mags$MAGs)
+# 5824 MAGs in which we have a CAZyme gene annotated
+
+# fill missing taxonomic levels in mags_cazymes by appending "_Unassigned" to the higher-level classification when a lower level is missing 
+mags_cazymes <- mags_cazymes %>%
+  mutate(Family  = ifelse(Family == "", str_c(Order, "_Unassigned"), Family),
+    Genus   = ifelse(Genus == "", str_c(Family, "_Unassigned"), Genus),
+    Species = ifelse(Species == "", str_c(Genus, "_Unassigned"), Species))
+```
+this gave us:
+- which MAGs have annotated CAZyme genes?
+ 
+make a table of the abundance of these MAGs in the samples
+```{r}
+# add the origin MAGs in cazymes_query_origin_mags to cazymes_abundance
+caz_abun_mags <- merge(cazymes_abundance, cazymes_query_origin_mags[, c("QUERY", "MAGs")], by = "QUERY")
+# move MAGs after QUERY
+caz_abun_mags <- caz_abun_mags %>%
+  relocate(MAGs, .after = QUERY)
+
+# summarise abundances by MAGs and sample
+mag_abundance_table <- caz_abun_mags %>%
+  select(-QUERY) %>% # take off genes for now
+  group_by(MAGs) %>% 
+  summarise(across(everything(), sum, na.rm = TRUE)) # add together all genes within each MAG
+```
+this gave us:
+- cazymes_query_origin_mags that includes the origin of the MAGs
+- the abundances of the MAGs in each sample based on the CAZYmes found in those MAGs
+
+!!!!!metadata is the same md as all the way above!!!
+
+CAZyme gene tables
+```{r}
+# merge abundances & annotations
+cazymes_genes <- cazymes_annotations %>% 
+  left_join(cazymes_abundance, by = "QUERY")
+
+# adding the metadata: 
+cazymes_genes_long <- cazymes_genes %>%
+  pivot_longer(cols = 8:101,
+               names_to = "SampleID",
+               values_to = "Abundance")
+
+# summarise by CAZymes instead of having all queries
+cazymes_genes_grouped <- cazymes_genes_long %>%
+  group_by(CAZY, FAMILY, DESCRIPTION, ENZYME, PATHWAY, KO, SampleID) %>%
+  summarise(Abundance = sum(Abundance))
+# add md
+md <- data.frame(past_meta) %>%
+  rownames_to_column(var = "SampleID")
+setDT(md)
+
+# add the subset of md_genes
+cazymes_genes_grouped_md <- cazymes_genes_grouped %>%
+  left_join(md, by = "SampleID")
+setDT(cazymes_genes_grouped_md)
+colnames(cazymes_genes_grouped_md)
+# sanity check - should be 94
+n_distinct(cazymes_genes_grouped_md$SampleID)
+```
+this gave:
+- CAZyme annotations & abundances together and a long version with all the metadata I need for the analysis
+
+cazymes_genes_grouped_md should be everything I need to make graphs
+
+
+### analysis
+#### which CAZyme family is most abundant? (box, can also do bar but box will be cleaner)
+- bar plot
+```{r}
+# stacked bar plot for family
+fam_bar <- ggplot(cazymes_genes_grouped_md, aes(x = SampleID, y = Abundance, fill = FAMILY)) +
+  geom_bar(stat = "identity", position = "fill") +
+  labs(title = "CAZyme family abundances across <i>ALL</i> samples",
+       x = "Sample",
+       y = "Abundance",
+       fill = "CAZyme Family") +
+  theme_linedraw() +
+  theme(axis.text.x = element_markdown(angle = 90, hjust = 1, size = 8),
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        plot.title = element_markdown(size = 12, face = "bold"),
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size = 12, face = "bold"),
+        legend.key.size = unit(1.5, "lines")) +
+  guides(fill = guide_legend(ncol = 1)) +
+  scale_fill_manual(values = caz_fam_cols) +
+  facet_wrap(~stunting, scales = "free_x") +
+  scale_x_discrete(labels = function(x) ifelse(grepl("^A", x), paste0("**", x, "**"), x))
+
+fam_bar
+```
+
+box separated by group and stunting status
+```{r}
+fam_box <- ggplot(cazymes_genes_grouped_md, aes(x = FAMILY, y = Abundance, fill = FAMILY, color = FAMILY)) +
+  geom_boxplot(alpha = 0.5) +
+  labs(title = "CAZyme Family distribution across <i>ALL</i> samples",
+       x = "CAZyme Family",
+       y = "Abundance (log<sub>10</sub>)",
+       color = "CAZyme Family") +
+  theme_linedraw() +
+  scale_y_log10() +
+  theme(axis.title.y = element_markdown(size = 10),
+        axis.text.y = element_text(size = 8),
+        axis.text.x = element_blank(),
+        plot.title = element_markdown(size = 15, face = "bold"),
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size = 12, face = "bold")) +
+  scale_fill_manual(values = caz_fam_cols, guide = "none") + # hide legned
+  scale_color_manual(values = caz_fam_cols) + # hide legend 
+  facet_grid(stunting~group)
+
+fam_box
+```
+
+
+wilcoxon tests
+```{r}
+# is there a sig differences in the abundance of different CAZYmme families (based on description too) in different stunting statuses
+wilcox_caz_fam_stun <- cazymes_genes_grouped_md %>%
+  group_by(FAMILY) %>%
+  summarise(p_value = wilcox.test(Abundance ~ stunting)$p.value) %>%
+  mutate(p_adjusted = p.adjust(p_value, method = "BH"))
+
+wilcox_caz_fam_stun_sig <- wilcox_caz_fam_stun %>%
+  filter(p_adjusted <0.05) # only 1
+
+wilcox_caz_fam_stun_sig
+```
+
+```{r}
+# is there a sig differences in the abundance of different CAZYme families (based on description too) in different communities
+wilcox_caz_fam_group <- cazymes_genes_grouped_md %>%
+  group_by(FAMILY) %>%
+  summarise(p_value = wilcox.test(Abundance ~ group)$p.value) %>%
+  mutate(p_adjusted = p.adjust(p_value, method = "BH"))
+
+wilcox_caz_fam_group_sig <- wilcox_caz_fam_group %>%
+  filter(p_adjusted <0.05) # 3x but no GHs
+
+wilcox_caz_fam_group_sig
+```
+I can also do the same thing based on wasting or any other metadata if i need it in the future.
+
+
+
+
+#### most abundant CAZymes in all samples - (horizontal bars)
+- which CAZymes are the most abundant in all samples?
+uniques based on each "unique" DESCRIPTION, not each CAZY
+```{r}
+# use cazymes_abundance and change anything >0 to be 1 for binary presence/absence data
+cazymes_binary <- cazymes_abundance %>%
+  mutate(across(2:ncol(.), ~ ifelse(. > 0, 1, 0)))
+
+# add CAZY, FAMILY and DESCRIPTION from cazymes_annotations based on QUERY
+cazymes_binary <- cazymes_binary %>%
+  left_join(cazymes_annotations %>% select(QUERY, CAZY, FAMILY, DESCRIPTION), 
+            by = "QUERY")
+
+# merge together anything that has the same DESCRIPTION (will end up with no QUERY, but I don't need anymore)
+cazymes_binary_merged <- cazymes_binary %>%
+  group_by(DESCRIPTION) %>%
+  summarise(across(where(is.numeric), first),  # keep first occurrence of numeric values
+            CAZY = paste(unique(CAZY), collapse = ", "),  
+            FAMILY = paste(unique(FAMILY), collapse = ", ")) %>%
+  ungroup() 
+# move CAZY & FAMILY .before DESCRIPTION
+cazymes_binary_merged <- cazymes_binary_merged %>%
+  relocate(CAZY, FAMILY, .before = DESCRIPTION)
+```
+
+```{r}
+# make sideways bar
+#cazymes_for_bar <- cazymes_binary_merged[,-c(2:3)]
+
+# sum up abundances for bar
+cazymes_for_bar <- cazymes_binary_merged %>%
+  mutate(TotalAbundance = rowSums(select(., 4:ncol(.)), na.rm = TRUE))
+
+# select just cazyme and total abundance
+cazymes_for_bar <- cazymes_for_bar %>%
+  select(CAZY, TotalAbundance)
+
+# merge together the same CAZymes 
+cazymes_for_bar_merged <- cazymes_for_bar %>%
+  group_by(CAZY) %>%
+  summarise(Abundance = sum(TotalAbundance, na.rm = TRUE), .groups = "drop")
+```
+
+add this code when I want to have specific CAZymes bold (i.e. for the ones most common in streps if I need it)
+```{r}
+# highlight bars from Strep data
+#cazymes_for_bar_merged <- cazymes_for_bar_merged %>%
+#mutate(bar_colour = ifelse(str_detect(CAZY, "GH13|GH32|GH77"), "highlight", "default"))
+# change GH130 back to default
+#cazymes_for_bar_merged <- cazymes_for_bar_merged %>%
+#  mutate(bar_colour = ifelse(CAZY == "GH130", "default", bar_colour))
+
+#for plot, to make families bold
+#bold_families <- c("GH13", "GH32", "GH77", "CBM48;GH13", "CBM20;GH13", "GH13;GH31", "GH32;GH32")
+
+# column for bold families
+#cazymes_for_bar_merged <- cazymes_for_bar_merged %>%
+#  mutate(bold_label = ifelse(CAZY %in% bold_families, 
+ #                            paste0("<b>", CAZY, "</b>"),  
+#                             CAZY))  # default is no bold
+```
+
+#### unique CAZymes in ALL samples
+```{r}
+# bar
+unique_bar <- ggplot(cazymes_for_bar_merged, aes(x = reorder(CAZY, Abundance), y = Abundance)) + 
+  geom_bar(stat = "identity", fill = "cornflowerblue") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique CAZymes in <i>ALL</i> samples") +
+  theme(
+    axis.text.y = element_text(size = 7, face = "bold"),
+    plot.title = element_markdown(size = 15, face = "bold"),
+    legend.position = "none") +
+  ylim(0, 800)
+
+unique_bar
+```
+
+Top 20
+```{r}
+# top 60
+cazymes_for_bar_merged_20 <- cazymes_for_bar_merged %>%
+  arrange(desc(Abundance)) %>%
+  slice_head(n = 20)
+
+# bar
+unique_bar_20 <- ggplot(cazymes_for_bar_merged_20, aes(x = reorder(CAZY, Abundance), y = Abundance)) + 
+  geom_bar(stat = "identity", fill = "cornflowerblue") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique CAZymes in <i>ALL</i> samples",
+       subtitle = "Top 20") +
+  theme(
+    axis.text.y = element_text(size = 8, face = "bold"),
+    plot.title = element_markdown(size = 12, face = "bold"),
+    plot.subtitle = element_text(size = 10, colour = "firebrick", face = "italic"),
+    legend.position = "none")+
+  ylim(0, 800)
+
+unique_bar_20
+```
+##### only AP 
+```{r}
+# filter cazymes_binary_merged to cazy, family, description and all AP samples
+cazymes_binary_merged_AP <- cazymes_binary_merged %>%
+  select(CAZY, FAMILY, DESCRIPTION, all_of(id_AP))
+
+# sum up abundances for bar
+cazymes_for_bar_AP <- cazymes_binary_merged_AP %>%
+  mutate(TotalAbundance = rowSums(select(., 4:ncol(.)), na.rm = TRUE))
+
+# select just cazyme and total abundance
+cazymes_for_bar_AP <- cazymes_for_bar_AP %>%
+  select(CAZY, TotalAbundance)
+
+# merge together the same CAZymes 
+cazymes_for_bar_merged_AP <- cazymes_for_bar_AP %>%
+  group_by(CAZY) %>%
+  summarise(Abundance = sum(TotalAbundance, na.rm = TRUE), .groups = "drop")
+```
+
+only top 20
+```{r}
+# top 20
+cazymes_for_bar_merged_AP_20 <- cazymes_for_bar_merged_AP %>%
+  arrange(desc(Abundance)) %>%
+  slice_head(n = 20)
+# bar
+unique_bar_AP <- ggplot(cazymes_for_bar_merged_AP_20, aes(x = reorder(CAZY, Abundance), y = Abundance)) + # use cazymes_for_bar_merged_AP if I want all of them
+  geom_bar(stat = "identity", fill = "cornflowerblue") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique CAZymes in <i>Agro-Pastoralist</i> samples",
+       subtitle = "Top 20") +
+  theme(axis.text.y = element_text(size = 10),
+        plot.title = element_markdown(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, colour = "firebrick", face = "bold.italic"),
+        legend.position = "none") +
+  ylim(0, 450)
+
+unique_bar_AP
+```
+
+##### only P
+```{r}
+# filter cazymes_binary_merged to cazy, family, description and all P samples
+cazymes_binary_merged_P <- cazymes_binary_merged %>%
+  select(CAZY, FAMILY, DESCRIPTION, all_of(id_P))
+
+# sum up abundances for bar
+cazymes_for_bar_P <- cazymes_binary_merged_P %>%
+  mutate(TotalAbundance = rowSums(select(., 4:ncol(.)), na.rm = TRUE))
+
+# select just cazyme and total abundance
+cazymes_for_bar_P <- cazymes_for_bar_P %>%
+  select(CAZY, TotalAbundance)
+
+# merge together the same CAZymes 
+cazymes_for_bar_merged_P <- cazymes_for_bar_P %>%
+  group_by(CAZY) %>%
+  summarise(Abundance = sum(TotalAbundance, na.rm = TRUE), .groups = "drop")
+```
+
+only top 20
+```{r}
+# top 20
+cazymes_for_bar_merged_P_20 <- cazymes_for_bar_merged_P %>%
+  arrange(desc(Abundance)) %>%
+  slice_head(n = 20)
+# bar
+unique_bar_P <- ggplot(cazymes_for_bar_merged_P_20, aes(x = reorder(CAZY, Abundance), y = Abundance)) + # use cazymes_for_bar_merged_P if I want all of them
+  geom_bar(stat = "identity", fill = "midnightblue") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique CAZymes in <i>Pastoralist</i> samples",
+       subtitle = "Top 20") +
+  theme(axis.text.y = element_text(size = 10),
+        plot.title = element_markdown(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, colour = "firebrick", face = "bold.italic"),
+        legend.position = "none") +
+  ylim(0, 350)
+
+unique_bar_P
+```
+
+##### only stunted samples
+```{r}
+# filter cazymes_binary_merged to cazy, family, description and all stunted samples
+cazymes_binary_merged_stunted <- cazymes_binary_merged %>%
+  select(CAZY, FAMILY, DESCRIPTION, all_of(id_stunted))
+
+# sum up abundances for bar
+cazymes_for_bar_stunted <- cazymes_binary_merged_stunted %>%
+  mutate(TotalAbundance = rowSums(select(., 4:ncol(.)), na.rm = TRUE))
+
+# select just cazyme and total abundance
+cazymes_for_bar_stunted <- cazymes_for_bar_stunted %>%
+  select(CAZY, TotalAbundance)
+
+# merge together the same CAZymes 
+cazymes_for_bar_merged_stunted <- cazymes_for_bar_stunted %>%
+  group_by(CAZY) %>%
+  summarise(Abundance = sum(TotalAbundance, na.rm = TRUE), .groups = "drop")
+```
+
+only top 20
+```{r}
+# top 20
+cazymes_for_bar_merged_stunted_20 <- cazymes_for_bar_merged_stunted %>%
+  arrange(desc(Abundance)) %>%
+  slice_head(n = 20)
+# bar
+unique_bar_stunted <- ggplot(cazymes_for_bar_merged_stunted_20, aes(x = reorder(CAZY, Abundance), y = Abundance)) + # use cazymes_for_bar_merged_stunted if I want all of them
+  geom_bar(stat = "identity", fill = "lightgoldenrod2") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique CAZymes in <i>stunted</i> samples",
+       subtitle = "Top 20") +
+  theme(axis.text.y = element_text(size = 10),
+        plot.title = element_markdown(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, colour = "firebrick", face = "bold.italic"),
+        legend.position = "none") +
+  ylim(0, 350)
+
+unique_bar_stunted
+```
+
+##### only healthy samples
+```{r}
+# filter cazymes_binary_merged to cazy, family, description and all P samples
+cazymes_binary_merged_not_stunted <- cazymes_binary_merged %>%
+  select(CAZY, FAMILY, DESCRIPTION, all_of(id_not_stunted))
+
+# sum up abundances for bar
+cazymes_for_bar_not_stunted <- cazymes_binary_merged_not_stunted %>%
+  mutate(TotalAbundance = rowSums(select(., 4:ncol(.)), na.rm = TRUE))
+
+# select just cazyme and total abundance
+cazymes_for_bar_not_stunted <- cazymes_for_bar_not_stunted %>%
+  select(CAZY, TotalAbundance)
+
+# merge together the same CAZymes 
+cazymes_for_bar_merged_not_stunted <- cazymes_for_bar_not_stunted %>%
+  group_by(CAZY) %>%
+  summarise(Abundance = sum(TotalAbundance, na.rm = TRUE), .groups = "drop")
+```
+
+only top 20
+```{r}
+# top 20
+cazymes_for_bar_merged_not_stunted_20 <- cazymes_for_bar_merged_not_stunted %>%
+  arrange(desc(Abundance)) %>%
+  slice_head(n = 20)
+# bar
+unique_bar_not_stunted <- ggplot(cazymes_for_bar_merged_not_stunted_20, aes(x = reorder(CAZY, Abundance), y = Abundance)) + # use cazymes_for_bar_merged_not_stunted if I want all of them
+  geom_bar(stat = "identity", fill = "mediumaquamarine") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique CAZymes in non-stunted samples",
+       subtitle = "Top 20") +
+  theme(axis.text.y = element_text(size = 10),
+        plot.title = element_markdown(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, colour = "firebrick", face = "bold.italic"),
+        legend.position = "none") +
+  ylim(0, 450)
+
+unique_bar_not_stunted
+```
+
+#### Top GHs in ALL samples
+GHs only
+```{r}
+# filter for GHS
+cazymes_for_bar_merged_GH <- cazymes_for_bar_merged %>%
+  filter(str_detect(CAZY, "GH"))
+
+# bar
+unique_bar_GH <- ggplot(cazymes_for_bar_merged_GH, aes(x = reorder(CAZY, Abundance), y = Abundance)) + 
+  geom_bar(stat = "identity", fill = "salmon") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique Glycoside Hydrolases in <i>ALL</i> samples") +
+  theme(
+    axis.text.y = element_text(size = 8, face = "bold"),
+    plot.title = element_markdown(size = 15, face = "bold"),
+    legend.position = "none")+
+  ylim(0, 450)
+
+unique_bar_GH
+```
+
+
+##### only AP 
+only top 20
+```{r}
+# top 20
+cazymes_for_bar_merged_AP_GH <- cazymes_for_bar_merged_AP %>%
+  filter(str_detect(CAZY, "GH"))
+
+# top 20
+cazymes_for_bar_merged_AP_GH_20 <- cazymes_for_bar_merged_AP_GH %>%
+  arrange(desc(Abundance)) %>%
+  slice_head(n = 20)
+
+# bar
+unique_bar_GH_AP <- ggplot(cazymes_for_bar_merged_AP_GH_20, aes(x = reorder(CAZY, Abundance), y = Abundance)) + # use cazymes_for_bar_merged_AP_GH if I want all of them
+  geom_bar(stat = "identity", fill = "salmon") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique GHs in <i>Agro-Pastoralist</i> samples",
+       subtitle = "Top 20") +
+  theme(axis.text.y = element_text(size = 10),
+        plot.title = element_markdown(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, colour = "firebrick", face = "bold.italic"),
+        legend.position = "none") +
+  ylim(0, 250)
+
+unique_bar_GH_AP
+```
+
+##### only P 
+only top 20
+```{r}
+# top 20
+cazymes_for_bar_merged_P_GH <- cazymes_for_bar_merged_P %>%
+  filter(str_detect(CAZY, "GH"))
+
+# top 20
+cazymes_for_bar_merged_P_GH_20 <- cazymes_for_bar_merged_P_GH %>%
+  arrange(desc(Abundance)) %>%
+  slice_head(n = 20)
+
+# bar
+unique_bar_GH_P <- ggplot(cazymes_for_bar_merged_P_GH_20, aes(x = reorder(CAZY, Abundance), y = Abundance)) + # use cazymes_for_bar_merged_P_GH if I want all of them
+  geom_bar(stat = "identity", fill = "firebrick") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique GHs in <i>Pastoralist</i> samples",
+       subtitle = "Top 20") +
+  theme(axis.text.y = element_text(size = 10),
+        plot.title = element_markdown(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, colour = "firebrick", face = "bold.italic"),
+        legend.position = "none") +
+  ylim(0, 200)
+
+unique_bar_GH_P
+```
+
+##### only stunted
+only top 20
+```{r}
+# top 20
+cazymes_for_bar_merged_stunted_GH <- cazymes_for_bar_merged_stunted %>%
+  filter(str_detect(CAZY, "GH"))
+
+# top 20
+cazymes_for_bar_merged_stunted_GH_20 <- cazymes_for_bar_merged_stunted_GH %>%
+  arrange(desc(Abundance)) %>%
+  slice_head(n = 20)
+
+# bar
+unique_bar_GH_stunted <- ggplot(cazymes_for_bar_merged_stunted_GH_20, aes(x = reorder(CAZY, Abundance), y = Abundance)) + # use cazymes_for_bar_merged_stunted_GH if I want all of them
+  geom_bar(stat = "identity", fill = "darkgoldenrod3") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique GHs in <i>stunted</i> samples",
+       subtitle = "Top 20") +
+  theme(axis.text.y = element_text(size = 10),
+        plot.title = element_markdown(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, colour = "firebrick", face = "bold.italic"),
+        legend.position = "none") +
+  ylim(0, 200)
+
+unique_bar_GH_stunted
+```
+
+##### only AP 
+only top 20
+```{r}
+# top 20
+cazymes_for_bar_merged_not_stunted_GH <- cazymes_for_bar_merged_not_stunted %>%
+  filter(str_detect(CAZY, "GH"))
+
+# top 20
+cazymes_for_bar_merged_not_stunted_GH_20 <- cazymes_for_bar_merged_not_stunted_GH %>%
+  arrange(desc(Abundance)) %>%
+  slice_head(n = 20)
+
+# bar
+unique_bar_GH_not_stunted <- ggplot(cazymes_for_bar_merged_not_stunted_GH_20, aes(x = reorder(CAZY, Abundance), y = Abundance)) + # use cazymes_for_bar_merged_not_stunted_GH if I want all of them
+  geom_bar(stat = "identity", fill = "aquamarine3") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique GHs in <i>healthy</i> samples",
+       subtitle = "Top 20") +
+  theme(axis.text.y = element_text(size = 10),
+        plot.title = element_markdown(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, colour = "firebrick", face = "bold.italic"),
+        legend.position = "none") +
+  ylim(0, 250)
+
+unique_bar_GH_not_stunted
+```
+****NEED DIFFERENTIAL ABUNDANCES****
+
+CAZyme abundance in the top 10 (to have strep) most abundant families in dataset 
+
+#### which bacterial family are most abundant in ALL CAZymes
+```{r}
+# link mag_abundance_table to taxonomy information on mags_tax_qc
+mag_abun_strep <- mag_abundance_table %>%
+  left_join(mags_tax %>%
+              select(MAGs, Kingdom, Phylum, Class, Order, Family, Genus, Species), by = "MAGs") %>%
+  relocate(Kingdom, Phylum, Class, Order, Family, Genus, Species, .after = MAGs)
+
+# by family
+mag_abun_strep_fam <- mag_abun_strep[,-c(1:5, 7, 8)]
+
+# sum of merged abundances
+mag_abun_strep_fam <- mag_abun_strep_fam %>%
+  group_by(Family) %>% 
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# since there's only one unassigned just changge it to a higher taxonomy
+mag_abun_strep_fam <- mag_abun_strep_fam %>%
+  mutate(Family = if_else(Family == "", "Clostridia_unassigned", Family))
+
+# sum rows to find the most abundant
+mag_abun_strep_fam <- mag_abun_strep_fam %>%
+  mutate(TotalAbundance = rowSums(select(., where(is.numeric))))%>%
+  relocate(TotalAbundance, .after = Family)
+
+# top 10 most abundant Families
+mag_abun_strep_fam_10 <- mag_abun_strep_fam %>%
+  arrange(desc(TotalAbundance)) %>% # descending order
+  slice_head(n = 10) # subset top 10
+
+# long format (take off total abundance first)
+mag_abun_strep_fam_10 <- mag_abun_strep_fam_10[, -2]
+# pivot
+mag_abun_strep_fam_10_long <- mag_abun_strep_fam_10 %>%
+  pivot_longer(cols = -Family, names_to = "SampleID", values_to = "Abundance")
+
+# add metadata
+mag_abun_strep_fam_10_long <- mag_abun_strep_fam_10_long %>%
+  left_join(md %>% select(SampleID, group, stunting), by = "SampleID")
+```
+
+```{r}
+# top 10 colours
+top_10_cols <- c("Lachnospiraceae" = "lightskyblue",
+              "Bacteroidaceae" = "mediumpurple1",
+              "Bifidobacteriaceae" = "tan",
+              "Enterobacteriaceae" = "lightgoldenrod2",
+              "Streptococcaceae" = "firebrick",
+              "Coprobacillaceae" = "#AE80A1",
+              "Ruminococcaceae" = "#332288",
+              "Acutalibacteraceae" = "#882255",
+              "Lactobacillaceae" = "lightpink",
+              "Tannerellaceae" = "gray57")
+
+top_10_cols <- setNames(top_10_cols[mag_abun_strep_fam_10_long$Family], 
+                     mag_abun_strep_fam_10_long$Family)
+
+top_10_fams_box <- ggplot(mag_abun_strep_fam_10_long, 
+                          aes(x = reorder(Family, -Abundance, median), 
+                              y = Abundance, 
+                              fill = Family, 
+                              colour = Family)) +
+  geom_boxplot(alpha = 0.6) + 
+  theme_linedraw() +
+  labs(x = "Family",
+       y = "Counts (log<sub>10</sub>)",
+       title = "Bacterial families with the highest counts of CAZymes",
+       subtitle = "Top 10 (by community)") + # also need to change if I'm changing the facet!!
+  scale_y_log10() + 
+  scale_fill_manual(values = top_10_cols) +
+  scale_color_manual(values = top_10_cols) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, face = "italic"),
+        axis.title.y = element_markdown(),
+        axis.text.y = element_text(size = 10),
+        legend.position = "none",
+        plot.title = element_text(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, face = "bold.italic", colour = "firebrick")) +
+    facet_wrap(~ group, ncol = 1) # can change by stunting or group
+top_10_fams_box
+```
+wilcoxon tests next
+```{r}
+# take off columns that aren't family 
+fam_abun_wilcox_long <- mag_abun_strep_fam[, -2]
+
+# long format with MAGs, Abundance, group, and stunting
+fam_abun_wilcox_long <- fam_abun_wilcox_long %>%
+  pivot_longer(cols = where(is.numeric), names_to = "SampleID", values_to = "Abundance") %>%
+  left_join(md %>% select(SampleID, group, stunting), by = "SampleID")
+
+# families to test
+fams <- unique(fam_abun_wilcox_long$Family)
+
+# results
+fam_wilcox_results <- list()
+
+# loop over fams
+for (fam in fams) {
+  fam_data <- fam_abun_wilcox_long %>% filter(Family == fam)
+  
+  # Wilcoxon tests
+  wilcox_group <- wilcox.test(Abundance ~ group, data = fam_data)
+  wilcox_stunting <- wilcox.test(Abundance ~ stunting, data = fam_data)
+  
+  fam_wilcox_results[[fam]] <- list(
+    group_wilcox = wilcox_group$p.value,
+    stunting_wilcox = wilcox_stunting$p.value
+  )
+}
+
+# df + p-values
+fam_wilcox_results_df <- data.frame(
+  Family = fams,
+  group_wilcoxon_p_value = sapply(fam_wilcox_results, function(x) x$group_wilcox),
+  stunting_wilcoxon_P_value = sapply(fam_wilcox_results, function(x) x$stunting_wilcox)
+)
+
+# FDR correction
+fam_wilcox_results_df$group_fdr_BH <- p.adjust(fam_wilcox_results_df$group_wilcoxon_p_value, method = "BH")
+fam_wilcox_results_df$stunting_fdr_BH <- p.adjust(fam_wilcox_results_df$stunting_wilcoxon_P_value, method = "BH")
+
+fam_wilcox_results_df
+
+# subset of significant values
+fam_wilcox_results_df_sig <- fam_wilcox_results_df %>%
+  filter(group_fdr_BH <= 0.05 | stunting_fdr_BH <= 0.05)
+fam_wilcox_results_df_sig
+```
+
+#### GHs only
+```{r}
+# need caz_abun_mags to be linked to taxonomy & CAZyme IDs
+# to taxonomies
+gh_abun_mags <- caz_abun_mags %>%
+    left_join(mags_tax %>%
+              select(MAGs, Kingdom, Phylum, Class, Order, Family, Genus, Species), by = "MAGs") %>%
+  relocate(Kingdom, Phylum, Class, Order, Family, Genus, Species, .after = MAGs)
+# to CAZyme IDs
+gh_abun_mags <- gh_abun_mags %>%
+  left_join(cazymes_genes %>%
+              select(QUERY, CAZY, FAMILY, DESCRIPTION), by = "QUERY") %>%
+  relocate(CAZY, FAMILY, DESCRIPTION, .after = QUERY)
+
+# change blank fams to higher taxonomy (all the same one, I checked)
+gh_abun_mags <- gh_abun_mags %>%
+  mutate(Family = if_else(Family == "", "Clostridia_unassigned", Family))
+
+# take off all taxonomy other than Family for now
+gh_abun_mags <- gh_abun_mags %>%
+  select(-Kingdom, -Phylum, -Class, -Order, -Species, -Genus)
+
+# filter for only GHs Glycoside hydrolases
+gh_abun_mags <- gh_abun_mags %>%
+  filter(FAMILY == "Glycoside hydrolases")
+
+# sum of merged abundances
+gh_abun_mags_fam <- gh_abun_mags %>%
+  group_by(CAZY, Family) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# sum rows to find the most abundant
+gh_abun_mags_fam <- gh_abun_mags_fam %>%
+  mutate(TotalAbundance = rowSums(select(., where(is.numeric)))) %>%
+  relocate(TotalAbundance, .after = "Family")
+
+# take off CAZY & regroup by Family & resum abundances
+gh_abun_mags_fam <- gh_abun_mags_fam %>%
+  select(-CAZY) %>%
+  group_by(Family) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# top 10 most abundant Families
+gh_abun_mags_fam_10 <- gh_abun_mags_fam %>%
+  arrange(desc(TotalAbundance)) %>% # descending order
+  slice_head(n = 10) # subset top 10
+
+# take off total abundance & make into long format
+gh_abun_mags_fam_10_long <- gh_abun_mags_fam_10 %>%
+  select(-TotalAbundance) %>%
+  pivot_longer(cols = -Family, names_to = "SampleID", values_to = "Abundance")
+  
+# add metadata
+gh_abun_mags_fam_10_long <- gh_abun_mags_fam_10_long %>%
+  left_join(md %>% select(SampleID, group, stunting), by = "SampleID")
+```
+
+top 10 families are the same as all CAZymes, can use top_10_cols
+```{r}
+gh_top_10_fams_box <- ggplot(gh_abun_mags_fam_10_long, 
+                          aes(x = reorder(Family, -Abundance, median), 
+                              y = Abundance, 
+                              fill = Family, 
+                              colour = Family)) +
+  geom_boxplot(alpha = 0.6) + 
+  theme_linedraw() +
+  labs(x = "Family",
+       y = "Counts (log<sub>10</sub>)",
+       title = "Bacterial families with the highest counts of GHs",
+       subtitle = "Top 10 (by community)") + # also need to change if I'm changing the facet!!
+  scale_y_log10() + 
+  scale_fill_manual(values = top_10_cols) +
+  scale_color_manual(values = top_10_cols) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, face = "italic"),
+        axis.title.y = element_markdown(),
+        axis.text.y = element_text(size = 10),
+        legend.position = "none",
+        plot.title = element_text(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "cornflowerblue")) +
+    facet_wrap(~ group, ncol = 1) # can change by stunting or group
+gh_top_10_fams_box
+```
+
+wilcoxon tests next
+```{r}
+# take off columns that aren't family 
+gh_fam_abun_wilcox_long <- gh_abun_mags_fam[, -2]
+
+# long format with MAGs, Abundance, group, and stunting
+gh_fam_abun_wilcox_long <- gh_fam_abun_wilcox_long %>%
+  pivot_longer(cols = where(is.numeric), names_to = "SampleID", values_to = "Abundance") %>%
+  left_join(md %>% select(SampleID, group, stunting), by = "SampleID")
+
+# families to test
+fams_GH <- unique(gh_fam_abun_wilcox_long$Family)
+
+# results
+GH_fam_wilcox_results <- list()
+
+# loop over fams
+for (fam in fams_GH) {
+  GH_fam_data <- gh_fam_abun_wilcox_long %>% filter(Family == fam)
+  
+  # Wilcoxon tests
+  wilcox_group <- wilcox.test(Abundance ~ group, data = GH_fam_data)
+  wilcox_stunting <- wilcox.test(Abundance ~ stunting, data = GH_fam_data)
+  
+  GH_fam_wilcox_results[[fam]] <- list(
+    group_wilcox = wilcox_group$p.value,
+    stunting_wilcox = wilcox_stunting$p.value
+  )
+}
+
+# df + p-values
+GH_fam_wilcox_results_df <- data.frame(
+  Family = fams_GH,
+  group_wilcoxon_p_value = sapply(GH_fam_wilcox_results, function(x) x$group_wilcox),
+  stunting_wilcoxon_P_value = sapply(GH_fam_wilcox_results, function(x) x$stunting_wilcox)
+)
+
+# FDR correction
+GH_fam_wilcox_results_df$group_fdr_BH <- p.adjust(GH_fam_wilcox_results_df$group_wilcoxon_p_value, method = "BH")
+GH_fam_wilcox_results_df$stunting_fdr_BH <- p.adjust(GH_fam_wilcox_results_df$stunting_wilcoxon_P_value, method = "BH")
+
+GH_fam_wilcox_results_df
+
+# subset of significant values
+GH_fam_wilcox_results_df_sig <- GH_fam_wilcox_results_df %>%
+  filter(group_fdr_BH <= 0.05 | stunting_fdr_BH <= 0.05)
+GH_fam_wilcox_results_df_sig
+```
+
+
+#### how many UNIQUE CAZymes does each sample have, comparing stunted and non-stunted children?
+samples instead of CAZymes
+```{r}
+# transpose 
+cazymes_binary_trans <- t(cazymes_binary_merged)
+# don't need CAZY, FAMILY or DESCRIPTION for now
+sample_cazymes <- as.data.frame(cazymes_binary_trans[-c(1:3),])
+
+# sum up abundances for bar
+sample_cazymes[] <- lapply(sample_cazymes, function(x) as.numeric(as.character(x)))
+sample_cazymes$COUNTS <- rowSums(sample_cazymes)
+
+sample_cazymes <- sample_cazymes %>%
+  rownames_to_column("SampleID")
+
+sample_cazymes_total <- sample_cazymes %>%
+  select(SampleID, COUNTS)
+# add some metadata
+sample_cazymes_meta <- sample_cazymes_total %>%
+  left_join(cazymes_genes_grouped_md %>%
+              select(SampleID, group, stunting) %>%
+              distinct(SampleID, .keep_all = TRUE), 
+            by = "SampleID")
+```
+
+```{r}
+# stunting status 
+sample_bar <- ggplot(sample_cazymes_meta, aes(x = reorder(SampleID, COUNTS), y = COUNTS, fill = stunting)) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +  # horizontal bars
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Count of unique CAZymes in each sample",
+       fill = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 8),
+        plot.title = element_text(size = 15, face = "bold")) +
+  scale_fill_manual(values = stun_colours)
+sample_bar
+```
+
+```{r}
+# Box plot with significance
+sample_box <- ggplot(sample_cazymes_meta, aes(x = stunting, y = COUNTS, fill = stunting)) +
+  geom_boxplot(outlier.shape = NA, width = 0.6, alpha = 0.8) +
+  geom_jitter(width = 0.2, alpha = 0.6, size = 1.5) +  # optional: show individual points
+  geom_signif(comparisons = list(c("Stunted", "Not Stunted")), 
+              map_signif_level = TRUE, 
+              textsize = 4, 
+              y_position = max(sample_cazymes_meta$COUNTS) * 1.05) +
+  theme_linedraw() +
+  labs(x = "Stunting Status",
+       y = "Counts",
+       title = "Count of unique CAZymes by stunting status",
+       fill = "Stunting Status") +
+  theme(axis.text = element_text(size = 10),
+        plot.title = element_text(size = 15, face = "bold")) +
+  scale_fill_manual(values = stun_colours)
+
+sample_box
+```
+
+Wilcoxon test - sample_cazymes_meta
+```{r}
+# wilcoxon test on CAZyme counts between stunting statuses
+wilcox_test_all <- wilcox.test(COUNTS ~ stunting, data = sample_cazymes_meta)
+
+wilcox_test_all$p.value # SIGNIFICANT p = 0.0008
+```
+
+only in AP samples
+```{r}
+# AP
+sample_cazymes_AP <- sample_cazymes_meta %>%
+  filter(str_detect(SampleID, "AP"))
+
+sample_bar_stunting_AP <- ggplot(sample_cazymes_AP, aes(x = reorder(SampleID, COUNTS), y = COUNTS, fill = stunting)) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Count of unique CAZymes in Agro-Pastoralist samples",
+       fill = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 8),
+        plot.title = element_text(size = 12, face = "bold")) +
+  scale_fill_manual(values = stun_colours) 
+
+sample_bar_stunting_AP
+```
+
+```{r}
+# Box plot of CAZymes for AP samples by stunting status
+sample_box_stunting_AP <- ggplot(sample_cazymes_AP, aes(x = stunting, y = COUNTS, fill = stunting, colour = stunting)) +
+  geom_boxplot(alpha = 0.5) +
+  geom_jitter(width = 0.2, alpha = 0.6, size = 1.5) +
+  geom_signif(comparisons = list(c("Stunted", "Not Stunted")),
+              map_signif_level = TRUE,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.2,
+              colour = "black",
+              y_position = 100) +
+  theme_linedraw() +
+  labs(x = "Stunting Status",
+       y = "Counts",
+       title = "CAZyme counts in Agro-Pastoralist samples",
+       color = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 10),
+        axis.text.x = element_blank(),
+        plot.title = element_text(size = 12, face = "bold")) +
+  scale_fill_manual(values = stun_colours) +
+  scale_color_manual(values = stun_colours) +
+  guides(fill = "none")
+
+sample_box_stunting_AP
+```
+
+
+Wilcoxon test - sample_cazymes_AP
+```{r}
+# wilcoxon test on CAZyme counts between stunting status
+wilcox_test_ap <- wilcox.test(COUNTS ~ stunting, data = sample_cazymes_AP)
+
+# View p-value
+wilcox_test_ap$p.value # SIGNIFICANT p = 0.004
+```
+
+only P samples
+```{r}
+# P
+sample_cazymes_P <- sample_cazymes_meta %>%
+  filter(!str_detect(SampleID, "A"))
+sample_cazymes_P <-  sample_cazymes_P[-1,]
+
+# bar
+sample_bar_stunting_P <- ggplot(sample_cazymes_P, aes(x = reorder(SampleID, COUNTS), y = COUNTS, fill = stunting)) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Count of unique CAZymes in Pastoralist samples",
+        fill = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 8),
+        plot.title = element_text(size = 12, face = "bold")) +
+  scale_fill_manual(values = stun_colours) 
+
+sample_bar_stunting_P
+```
+
+```{r}
+# Box plot of CAZymes for P samples by stunting status
+sample_box_stunting_P <- ggplot(sample_cazymes_P, aes(x = stunting, y = COUNTS, fill = stunting, colour = stunting)) +
+  geom_boxplot(alpha = 0.5) +
+  geom_jitter(width = 0.2, alpha = 0.6, size = 1.5) +
+  geom_signif(comparisons = list(c("Stunted", "Not Stunted")),
+              map_signif_level = TRUE,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.2,
+              colour = "black",
+              y_position = 100) +
+  theme_linedraw() +
+  labs(x = "Stunting Status",
+       y = "Counts",
+       title = "CAZyme counts in Pastoralist samples",
+       color = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 10),
+        axis.text.x = element_blank(),
+        plot.title = element_text(size = 12, face = "bold")) +
+  scale_fill_manual(values = stun_colours) +
+  scale_color_manual(values = stun_colours) +
+  guides(fill = "none")
+
+sample_box_stunting_P
+```
+
+Wilcoxon test - sample_cazymes_P
+```{r}
+# wilcoxon test on CAZyme counts between stunting statuses
+wilcox_test_p <- wilcox.test(COUNTS ~ stunting, data = sample_cazymes_P)
+
+wilcox_test_p$p.value # not significant p = 0.087
+```
+
+CORRECT FOR MULTIPLE TESTING
+```{r}
+# correct for multiple testing - BH
+pvals_cazymes <- c(all = wilcox_test_all$p.value,
+                 AP = wilcox_test_ap$p.value,
+                 P = wilcox_test_p$p.value)
+
+pvals_cazymes_adj <- p.adjust(pvals_cazymes, method = "BH")
+pvals_cazymes_adj
+```
+
+
+
+#### how many UNIQUE GHs does each sample have, comparing stunted and non-stunted children?
+```{r}
+sample_cazymes_GH <- cazymes_binary_merged %>%
+  filter(str_detect(CAZY, "GH"))
+
+sample_cazymes_GH_trans <- t(sample_cazymes_GH)
+sample_cazymes_GH_trans <- as.data.frame(sample_cazymes_GH_trans[-c(1:3),])
+
+# sum up abundances for bar
+sample_cazymes_GH_trans[] <- lapply(sample_cazymes_GH_trans, function(x) as.numeric(as.character(x)))
+sample_cazymes_GH_trans$COUNTS <- rowSums(sample_cazymes_GH_trans)
+
+sample_cazymes_GH_trans <- sample_cazymes_GH_trans %>%
+  rownames_to_column("SampleID")%>%
+  select(SampleID, COUNTS)
+
+# add some metadata
+sample_cazymes_GH_trans <- sample_cazymes_GH_trans %>%
+  left_join(cazymes_genes_grouped_md %>%
+              select(SampleID, group, stunting) %>%
+              distinct(SampleID, .keep_all = TRUE), 
+            by = "SampleID")
+```
+
+```{r}
+gh_stun_colours <- c("Stunted" = "darkgoldenrod3",
+                     "Not Stunted" = "aquamarine3")
+
+# bar
+sample_GH_bar <- ggplot(sample_cazymes_GH_trans, aes(x = reorder(SampleID, COUNTS), y = COUNTS, fill = stunting)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +  # Horizontal bars
+  theme_light() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Count of unique GHs in each sample",
+       fill = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 8),
+        plot.title = element_text(size = 15, face = "bold")) +
+  scale_fill_manual(values = gh_stun_colours) 
+
+sample_GH_bar
+```
+Wilcoxon test - sample_cazymes_GH_trans
+```{r}
+# wilcoxon test on CAZyme counts between stunting statuses
+wilcox_test_all_GH <- wilcox.test(COUNTS ~ stunting, data = sample_cazymes_GH_trans)
+
+wilcox_test_all_GH$p.value # SIGNIFICANT p = 0.00044
+```
+
+only in AP samples
+```{r}
+sample_GH_AP <- sample_cazymes_GH_trans %>%
+  filter(str_detect(SampleID, "AP"))
+# bar
+sample_bar_stunting_GH_AP <- ggplot(sample_GH_AP, aes(x = reorder(SampleID, COUNTS), y = COUNTS, fill = stunting)) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Count of unique GHs in Agro-Pastoralist samples",
+       fill = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 8),
+        plot.title = element_text(size = 15, face = "bold")) +
+  scale_fill_manual(values = gh_stun_colours) 
+
+sample_bar_stunting_GH_AP
+```
+
+Wilcoxon test - sample_GH_AP
+```{r}
+# wilcoxon test on CAZyme counts between stunting statuses
+wilcox_test_AP_GH <- wilcox.test(COUNTS ~ stunting, data = sample_GH_AP)
+
+wilcox_test_AP_GH$p.value # SIGNIFICANT p = 0.0014
+```
+
+only P samples
+```{r}
+sample_GH_P <- sample_cazymes_GH_trans %>%
+  filter(!str_detect(SampleID, "A"))
+# bar
+sample_bar_stunting_GH_P <- ggplot(sample_GH_P, aes(x = reorder(SampleID, COUNTS), y = COUNTS, fill = stunting)) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Count of unique GHs in Pastoralist samples",
+       fill = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 8),
+        plot.title = element_text(size = 15, face = "bold")) +
+  scale_fill_manual(values = gh_stun_colours) 
+
+sample_bar_stunting_GH_P
+```
+
+Wilcoxon test - sample_GH_P
+```{r}
+# wilcoxon test on CAZyme counts between stunting statuses
+wilcox_test_P_GH <- wilcox.test(COUNTS ~ stunting, data = sample_GH_P)
+
+wilcox_test_P_GH$p.value # not significant p = 0.123
+```
+
+CORRECT FOR MULTIPLE TESTING
+```{r}
+# correct for multiple testing - BH
+pvals_GH <- c(all = wilcox_test_all_GH$p.value,
+                 AP = wilcox_test_AP_GH$p.value,
+                 P = wilcox_test_P_GH$p.value)
+
+pvals_GH_adj <- p.adjust(pvals_GH, method = "BH")
+pvals_GH_adj
+```
+
+
+#### how many UNIQUE CAZymes does each bacterial family(can change taxa) have? (sideways bar)
+- which taxa have the most CAZymes? (bar if there's not to many, sideways)
+```{r}
+# subset of cazymes_query_origin_mags with only QUERY & MAGs columns
+taxa_cazy <- cazymes_query_origin_mags %>%
+  select(QUERY, MAGs)
+
+# add CAZY, FAMILY and DESCRIPTION from cazymes_annotations to the subset based on QUERY
+taxa_cazy <- taxa_cazy %>%
+  left_join(cazymes_annotations %>% select(QUERY, CAZY, FAMILY, DESCRIPTION), 
+            by = "QUERY")
+
+# add Kingdom, Phylum, Class, Order, Family, Genus & Species from mags_tax_qc into subset based on MAGs
+taxa_cazy <- taxa_cazy %>%
+  left_join(mags_tax_qc %>% select(MAGs, Kingdom, Phylum, Class, Order, Family, Genus, Species), 
+            by = "MAGs")
+# no need for QUERY anymore
+taxa_cazy <- taxa_cazy[,-1]
+
+# merge anything with the same DESCRIPTION and MAGs together
+taxa_cazy_merged <- taxa_cazy %>%
+  group_by(DESCRIPTION, MAGs) %>%
+  summarise(
+    CAZY = paste(unique(CAZY), collapse = ", "),
+    FAMILY = paste(unique(FAMILY), collapse = ", "),
+    Kingdom = first(Kingdom),
+    Phylum = first(Phylum),
+    Class = first(Class),
+    Order = first(Order),
+    Family = first(Family),
+    Genus = first(Genus),
+    Species = first(Species),
+    .groups = "drop")
+# 97'210
+
+# since there's only one unassigned just changge it to a higher taxonomy
+taxa_cazy_merged <- taxa_cazy_merged %>%
+  mutate(Family = if_else(Family == "", "Clostridia_unassigned", Family))
+
+# which taxonomy to pick - how many disctinct does x column have?
+taxa_cazy_merged %>% summarise("Uniques" = n_distinct(Family)) #can change taxonomy
+
+# count how many CAZY with the same Family and make a table from it 
+cazy_Family_table <- taxa_cazy_merged %>%
+  group_by(Family) %>%
+  summarise(Count = n()) %>%
+  arrange(desc(Count))
+
+# take off the one NA
+cazy_Family_table <- cazy_Family_table %>%
+  filter(!is.na(Family))
+```
+
+sideways bar of Family x UNIQUE CAZymes
+```{r}
+cazy_Family_bar <- ggplot(cazy_Family_table, aes(x = reorder(Family, Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "cornflowerblue") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = "Family",
+       y = "Counts",
+       title = "Unique CAZymes in every bacterial Family") +
+  theme(axis.text.y = element_text(size = 8, face = "bold.italic"),
+        plot.title = element_text(size = 15, face = "bold"))
+
+cazy_Family_bar
+```
+
+Make subset of top 50? will have better readability
+```{r}
+cazy_Family_top40 <- cazy_Family_table %>%
+  top_n(40, Count) %>%  # top 40 based on Count
+  arrange(desc(Count))
+
+# bar
+cazy_Family_bar_40 <- ggplot(cazy_Family_top40, aes(x = reorder(Family, Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "cornflowerblue") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = "Family",
+       y = "Counts",
+       title = "Unique CAZymes in every bacterial Family",
+       subtitle = "Top 40") +
+  theme(axis.text.y = element_text(size = 8, face = "bold.italic"),
+        plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, colour = "firebrick", face = "italic")) +
+  guides(fill = "none")
+
+cazy_Family_bar_40
+```
+
+GHs only
+```{r}
+# filter taxa_cazy_merged to only have GHs
+taxa_cazy_merged_GH <- taxa_cazy_merged %>%
+  filter(str_detect(CAZY, "GH"))
+
+# count how many GH with the same Family and make a table from it 
+cazy_Family_table_GH <- taxa_cazy_merged_GH %>%
+  group_by(Family) %>%
+  summarise(Count = n()) %>%
+  arrange(desc(Count))
+
+# take off the one NA
+cazy_Family_table_GH <- cazy_Family_table_GH %>%
+  filter(!is.na(Family))
+
+# bar
+cazy_Family_bar_GH <- ggplot(cazy_Family_table_GH, aes(x = reorder(Family, Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "salmon") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = "Family",
+       y = "Counts",
+       title = "Unique GHs in every bacterial Family") +
+  theme(axis.text.y = element_text(size = 8, face = "bold.italic"),
+        plot.title = element_text(size = 15, face = "bold"))
+
+cazy_Family_bar_GH
+```
+Top 40
+```{r}
+cazy_Family_GH_top40 <- cazy_Family_table_GH %>%
+  top_n(40, Count) %>%  # top 40 based on Count
+  arrange(desc(Count))
+
+# bar
+cazy_Family_bar_GH_40 <- ggplot(cazy_Family_GH_top40, aes(x = reorder(Family, Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "salmon") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = "Family",
+       y = "Counts",
+       title = "Unique GHs in every bacterial Family",
+       subtitle = "Top 40") +
+  theme(axis.text.y = element_text(size = 8, face = "bold.italic"),
+        plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(colour = "firebrick", face = "italic"))
+
+cazy_Family_bar_GH_40
+```
+--------------------------------------------------------------------------------
+Insert deeper level analysis here
+--------------------------------------------------------------------------------
+#### Family
+TO DO:
+- make a table where rows are bacterial family (or genus) and columns are different CAZymes with their abundances in each bacterial family
+- make maybe bar plot of bacterial families and the proportions of different cazymes - or a heatmap idk yet
+```{r}
+# merge caz_abun_mags with mags_tax_qc
+cazymes_with_tax <- caz_abun_mags %>%
+  left_join(mags_tax_qc[, c("MAGs", "Family")], by = "MAGs") %>% # can cahange to genus here if I want
+  left_join(cazymes_annotations[, c("QUERY", "CAZY", "DESCRIPTION")], by = "QUERY")
+
+# sum across samples per family x cazymes
+fam_cazy_abun <- cazymes_with_tax %>%
+  group_by(Family, CAZY) %>% # can add description here if I need "uniques"
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# change empty families to Unassigned
+fam_cazy_abun <- fam_cazy_abun %>%
+  mutate(Family = ifelse(Family == "", "Unassigned", Family))
+```
+
+```{r}
+# total abundance of each CAZyme in each bacterial family
+fam_cazyme_total <- fam_cazy_abun %>%
+  rowwise() %>%
+  mutate(TotalAbundance = sum(c_across(where(is.numeric)))) %>%
+  select(Family, CAZY, TotalAbundance)
+
+# pivot wider to have cazymex family
+fam_cazy <- fam_cazyme_total %>%
+  pivot_wider(names_from = CAZY, values_from = TotalAbundance, values_fill = 0)
+
+# filter fam_cazy_rel to the top 10 families with the most cazymes
+fam_cazy_10 <- fam_cazy %>%
+  filter(Family %in% mag_abun_strep_fam_10$Family)
+```
+
+ALL families
+```{r}
+hm_cazymes_all <- fam_cazy %>%
+  column_to_rownames(var = "Family") %>%
+  as.matrix()
+
+hm_cazymes_all_log <- log10(hm_cazymes_all +1)
+
+hm_colours_all <- colorRamp2(breaks = c(min(hm_cazymes_all_log), median(hm_cazymes_all_log), max(hm_cazymes_all_log)),
+                         colors = c("white", "lightskyblue", "deepskyblue4"))
+```
+
+```{r}
+hm_caz <- Heatmap(hm_cazymes_all_log,
+        name = "log10(abundance+1)",
+        col = hm_colours_all,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 8, fontface = "italic"),
+        column_names_gp = gpar(fontsize = 8),
+        column_title = "CAZymes",
+        row_title = "Family")
+hm_caz
+```
+
+heatmap
+```{r}
+hm_cazymes <- fam_cazy_10 %>%
+  column_to_rownames(var = "Family") %>%
+  as.matrix()
+
+hm_cazymes_log <- log10(hm_cazymes +1)
+
+hm_colours <- colorRamp2(breaks = c(min(hm_cazymes_log), median(hm_cazymes_log), max(hm_cazymes_log)),
+                         colors = c("white", "slateblue", "midnightblue"))
+```
+
+```{r}
+column_labels <- colnames(hm_cazymes_log)
+
+hm_caz_10 <- Heatmap(hm_cazymes_log,
+        name = "log10 (abundance+1)",
+        col = hm_colours,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 12, fontface = "italic"),
+        column_names_gp = gpar(fontsize = 10,
+                               fontface = ifelse(grepl("GH", column_labels), "bold", "plain")),
+        column_title = "CAZymes",
+        column_title_gp = gpar(fontsize = 10, fontface = "bold"),
+        row_title = "Top 10 Families with the most CAZymes",
+        row_title_gp = gpar(fontsize = 10, fontface = "bold"),
+        heatmap_legend_param = list(title_gp = gpar(fontsize = 8),
+                                    labels_gp = gpar(fontsize = 7, fontface = "bold"))) 
+hm_caz_10
+```
+
+GHs only
+```{r}
+# filter fam_cazy to only have GHs
+fam_ghs <- fam_cazy %>%
+  select(Family, contains("GH"))
+
+fam_ghs_10 <- fam_ghs %>%
+  filter(Family %in% gh_abun_mags_fam_10_long$Family)
+```
+
+GHs in ALL families
+```{r}
+hm_ghs_all <- fam_ghs %>%
+  column_to_rownames(var = "Family") %>%
+  as.matrix()
+
+hm_ghs_all_log <- log10(hm_ghs_all +1)
+
+hm_colours_all_ghs <- colorRamp2(breaks = c(min(hm_ghs_all_log), median(hm_ghs_all_log), max(hm_ghs_all_log)),
+                         colors = c("white", "lightpink", "palevioletred3"))
+```
+
+```{r}
+hm_gh <- Heatmap(hm_ghs_all_log,
+        name = "log10(abundance+1)",
+        col = hm_colours_all_ghs,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 10, fontface = "italic"),
+        column_names_gp = gpar(fontsize = 8),
+        column_title = "Glycoside Hydrolases",
+        row_title = "Family")
+hm_gh
+```
+
+GHs in top 10 families
+```{r}
+hm_ghs_10 <- fam_ghs_10 %>%
+  column_to_rownames(var = "Family") %>%
+  as.matrix()
+
+hm_ghs_10_log <- log10(hm_ghs_10 +1)
+
+hm_colours_10_ghs <- colorRamp2(breaks = c(min(hm_ghs_10_log), median(hm_ghs_10_log), max(hm_ghs_10_log)),
+                         colors = c("white", "salmon", "firebrick"))
+```
+
+```{r}
+hm_gh_10 <- Heatmap(hm_ghs_10_log,
+        name = "log10(abundance+1)",
+        col = hm_colours_10_ghs,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 10, fontface = "italic"),
+        column_names_gp = gpar(fontsize = 8),
+        column_title = "Glycoside Hydrolases (GHs)",
+        row_title = "Top 10 Families with the most GHs")
+hm_gh_10
+```
+
+```{r}
+diff_cazymes <- cazymes_with_tax %>%
+  select(CAZY, DESCRIPTION, Family, all_of(id_AP), all_of(id_P)) %>%
+  mutate(Family = ifelse(Family == "", "Unassigned", Family)) %>%
+  pivot_longer(cols = -c(CAZY, DESCRIPTION, Family),
+               names_to = "SampleID", values_to = "Abundance") %>%
+  group_by(SampleID, Family, CAZY, DESCRIPTION) %>%
+  summarise(Abundance = sum(Abundance, na.rm = TRUE), .groups = "drop") %>%
+  mutate(CAZyme = paste(CAZY, DESCRIPTION, sep = "__"))
+
+# add metadata
+diff_cazymes <- diff_cazymes %>%
+  left_join(md, by = "SampleID")
+```
+
+differential abundances for each cazyme/family pair - is there a significant difference in abundance between *x* cazyme in *x* family between AP/P and stunted/not stunted samples?
+```{r}
+diff_cazymes_results <- list()  # store results
+i <- 1  # row counter
+
+# unique cazyme/family combos
+cazy_fam_combos <- unique(diff_cazymes[, c("CAZyme", "Family")])
+
+for (row in 1:nrow(cazy_fam_combos)) {
+  cazy <- cazy_fam_combos$CAZyme[row]
+  fam <- cazy_fam_combos$Family[row]
+  
+  # dataaaa
+  subset_data <- diff_cazymes %>%
+    filter(CAZyme == cazy, Family == fam)
+  
+  # wilcox group
+  p_group <- tryCatch(
+    wilcox.test(Abundance ~ group, data = subset_data)$p.value,
+    error = function(e) NA)
+  
+  # wilcox stunting
+  p_stunt <- tryCatch(
+    wilcox.test(Abundance ~ stunting, data = subset_data)$p.value,
+    error = function(e) NA)
+  
+  # store in df
+  diff_cazymes_results[[i]] <- data.frame(
+    CAZyme = cazy,
+    Family = fam,
+    p_group = p_group,
+    p_stunt = p_stunt)
+  
+  i <- i + 1
+}
+
+# into df
+diff_results_df <- do.call(rbind, diff_cazymes_results)
+
+# adjust by BH
+diff_results_df <- diff_results_df %>%
+  mutate(
+    p_adj_group = p.adjust(p_group, method = "BH"),
+    p_adj_stunt = p.adjust(p_stunt, method = "BH"))
+
+diff_results_sig <- diff_results_df %>%
+  filter(p_adj_group < 0.05 | p_adj_stunt < 0.05)
+
+# excel
+# library(writexl)
+write_xlsx(diff_results_sig, "wilcox_family_x_cazyme.xlsx")
+```
+
+#### Genus
+TO DO:
+- make a table where rows are bacterial genus and columns are different CAZymes with their abundances in each bacterial Genus
+- make maybe bar plot of bacterial families and the proportions of different cazymes - or a heatmap idk yet
+```{r}
+# merge caz_abun_mags with mags_tax_qc
+cazymes_with_tax_genus <- caz_abun_mags %>%
+  left_join(mags_tax_qc[, c("MAGs", "Genus")], by = "MAGs") %>%
+  left_join(cazymes_annotations[, c("QUERY", "CAZY", "DESCRIPTION")], by = "QUERY")
+
+# sum across samples per Genus x cazymes
+genus_cazy_abun <- cazymes_with_tax_genus %>%
+  group_by(Genus, CAZY) %>% # can add description here if I need "uniques"
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# change empty genera to Unassigned
+genus_cazy_abun <- genus_cazy_abun %>%
+  mutate(Genus = ifelse(Genus == "", "Unassigned", Genus))
+```
+
+```{r}
+# total abundance of each CAZyme in each bacterial Genus
+genus_cazyme_total <- genus_cazy_abun %>%
+  rowwise() %>%
+  mutate(TotalAbundance = sum(c_across(where(is.numeric)))) %>%
+  select(Genus, CAZY, TotalAbundance)
+
+# pivot wider to have cazymes Genus
+genus_cazy <- genus_cazyme_total %>%
+  pivot_wider(names_from = CAZY, values_from = TotalAbundance, values_fill = 0)
+```
+
+
+```{r}
+# by genus
+mag_abun_strep_genus <- mag_abun_strep[,-c(1:6, 8)]
+
+# sum of merged abundances
+mag_abun_strep_genus <- mag_abun_strep_genus %>%
+  group_by(Genus) %>% 
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# since there's only one unassigned just changge it to a higher taxonomy
+mag_abun_strep_genus <- mag_abun_strep_genus %>%
+  mutate(Genus = if_else(Genus == "", "Clostridia_unassigned", Genus))
+
+# sum rows to find the most abundant
+mag_abun_strep_genus <- mag_abun_strep_genus %>%
+  mutate(TotalAbundance = rowSums(select(., where(is.numeric))))%>%
+  relocate(TotalAbundance, .after = Genus)
+
+# top 10 most abundant genera
+mag_abun_strep_genus_10 <- mag_abun_strep_genus %>%
+  arrange(desc(TotalAbundance)) %>% # descending order
+  slice_head(n = 10) # subset top 10
+
+# filter genus_cazy_rel to the top 10 families with the most cazymes
+genus_cazy_10 <- genus_cazy %>%
+  filter(Genus %in% mag_abun_strep_genus_10$Genus)
+```
+
+ALL genera
+```{r}
+hm_cazymes_all_genus <- genus_cazy %>%
+  column_to_rownames(var = "Genus") %>%
+  as.matrix()
+
+hm_cazymes_all_genus_log <- log10(hm_cazymes_all_genus +1)
+```
+
+```{r}
+hm_caz_genus <- Heatmap(hm_cazymes_all_genus_log,
+        name = "log10(abundance+1)",
+        col = hm_colours_all,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 10, fontface = "italic"),
+        column_names_gp = gpar(fontsize = 8),
+        column_title = "CAZymes",
+        row_title = "Genus")
+hm_caz_genus
+```
+
+heatmap
+```{r}
+hm_cazymes_genus <- genus_cazy_10 %>%
+  column_to_rownames(var = "Genus") %>%
+  as.matrix()
+
+hm_cazymes_genus_log <- log10(hm_cazymes_genus +1)
+```
+
+```{r}
+hm_caz_genus_10 <- Heatmap(hm_cazymes_genus_log,
+        name = "log10(abundance+1)",
+        col = hm_colours,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 10, fontface = "italic"),
+        column_names_gp = gpar(fontsize = 8),
+        column_title = "CAZymes",
+        row_title = "Top 10 Genera with the most CAZymes")
+hm_caz_genus_10
+```
+
+GHs only
+```{r}
+# filter genus_cazy to only have GHs
+genus_ghs <- genus_cazy %>%
+  select(Genus, contains("GH"))
+```
+
+```{r}
+# need caz_abun_mags to be linked to taxonomy & CAZyme IDs
+# to taxonomies
+gh_abun_mags_genus <- caz_abun_mags %>%
+    left_join(mags_tax %>%
+              select(MAGs, Kingdom, Phylum, Class, Order, Family, Genus, Species), by = "MAGs") %>%
+  relocate(Kingdom, Phylum, Class, Order, Family, Genus, Species, .after = MAGs)
+# to CAZyme IDs
+gh_abun_mags_genus <- gh_abun_mags_genus %>%
+  left_join(cazymes_genes %>%
+              select(QUERY, CAZY, FAMILY, DESCRIPTION), by = "QUERY") %>%
+  relocate(CAZY, FAMILY, DESCRIPTION, .after = QUERY)
+
+# change blank fams to higher taxonomy (all the same one, I checked)
+gh_abun_mags_genus <- gh_abun_mags_genus %>%
+  mutate(Genus = if_else(Genus == "", "Clostridia_unassigned", Genus))
+
+# take off all taxonomy other than Genus for now
+gh_abun_mags_genus <- gh_abun_mags_genus %>%
+  select(-Kingdom, -Phylum, -Class, -Order, -Species, -Family)
+
+# filter for only GHs Glycoside hydrolases
+gh_abun_mags_genus <- gh_abun_mags_genus %>%
+  filter(FAMILY == "Glycoside hydrolases")
+
+# sum of merged abundances
+gh_abun_mags_genus_total <- gh_abun_mags_genus %>%
+  group_by(CAZY, Genus) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# sum rows to find the most abundant
+gh_abun_mags_genus_total <- gh_abun_mags_genus_total %>%
+  mutate(TotalAbundance = rowSums(select(., where(is.numeric)))) %>%
+  relocate(TotalAbundance, .after = "Genus")
+
+# take off CAZY & regroup by Genus & resum abundances
+gh_abun_mags_genus_total <- gh_abun_mags_genus_total %>%
+  select(-CAZY) %>%
+  group_by(Genus) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# top 10 most abundant Genera
+gh_abun_mags_genus_10 <- gh_abun_mags_genus_total %>%
+  arrange(desc(TotalAbundance)) %>% # descending order
+  slice_head(n = 10) # subset top 10
+```
+
+```{r}
+genus_ghs_10 <- genus_ghs %>%
+  filter(Genus %in% gh_abun_mags_genus_10$Genus)
+```
+
+GHs in ALL families
+```{r}
+hm_ghs_all_genus <- genus_ghs %>%
+  column_to_rownames(var = "Genus") %>%
+  as.matrix()
+
+hm_ghs_all_genus_log <- log10(hm_ghs_all_genus +1)
+```
+
+```{r}
+hm_gh_genus <- Heatmap(hm_ghs_all_genus_log,
+        name = "log10(abundance+1)",
+        col = hm_colours_all_ghs,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 10, fontface = "italic"),
+        column_names_gp = gpar(fontsize = 8),
+        column_title = "Glycoside Hydrolases",
+        row_title = "Genus")
+hm_gh_genus
+```
+
+GHs in top 10 families
+```{r}
+hm_ghs_genus_10 <- genus_ghs_10 %>%
+  column_to_rownames(var = "Genus") %>%
+  as.matrix()
+
+hm_ghs_genus_10_log <- log10(hm_ghs_genus_10 +1)
+```
+
+```{r}
+hm_gh_genus_10 <- Heatmap(hm_ghs_genus_10_log,
+        name = "log10(abundance+1)",
+        col = hm_colours_10_ghs,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 10, fontface = "italic"),
+        column_names_gp = gpar(fontsize = 8),
+        column_title = "Glycoside Hydrolases (GHs)",
+        row_title = "Top 10 Genera with the most GHs")
+hm_gh_genus_10
+```
+
+```{r}
+diff_cazymes_genus<- cazymes_with_tax_genus %>%
+  select(CAZY, DESCRIPTION, Genus, all_of(id_AP), all_of(id_P)) %>%
+  mutate(Genus = ifelse(Genus == "", "Unassigned", Genus)) %>%
+  pivot_longer(cols = -c(CAZY, DESCRIPTION, Genus),
+               names_to = "SampleID", values_to = "Abundance") %>%
+  group_by(SampleID, Genus, CAZY, DESCRIPTION) %>%
+  summarise(Abundance = sum(Abundance, na.rm = TRUE), .groups = "drop") %>%
+  mutate(CAZyme = paste(CAZY, DESCRIPTION, sep = "__"))
+
+# add metadata
+diff_cazymes_genus <- diff_cazymes_genus %>%
+  left_join(md, by = "SampleID")
+```
+
+differential abundances for each cazyme/Genus pair - is there a significant difference in abundance between *x* cazyme in *x* Genus between AP/P and stunted/not stunted samples?
+```{r}
+diff_cazymes_results_genus <- list()  # store results
+i <- 1  # row counter
+
+# unique cazyme/Genus combos
+cazy_fam_combos_genus <- unique(diff_cazymes_genus[, c("CAZyme", "Genus")])
+
+for (row in 1:nrow(cazy_fam_combos_genus)) {
+  cazy_genus <- cazy_fam_combos_genus$CAZyme[row]
+  genus <- cazy_fam_combos_genus$Genus[row]
+  
+  # dataaaa
+  subset_data <- diff_cazymes_genus %>%
+    filter(CAZyme == cazy_genus, Genus == genus)
+  
+  # wilcox group
+  p_group <- tryCatch(
+    wilcox.test(Abundance ~ group, data = subset_data)$p.value,
+    error = function(e) NA)
+  
+  # wilcox stunting
+  p_stunt <- tryCatch(
+    wilcox.test(Abundance ~ stunting, data = subset_data)$p.value,
+    error = function(e) NA)
+  
+  # store in df
+  diff_cazymes_results_genus[[i]] <- data.frame(
+    CAZyme = cazy_genus,
+    Genus = genus,
+    p_group = p_group,
+    p_stunt = p_stunt)
+  
+  i <- i + 1
+}
+
+# into df
+diff_results_genus_df <- do.call(rbind, diff_cazymes_results_genus)
+
+# adjust by BH
+diff_results_genus_df <- diff_results_genus_df %>%
+  mutate(
+    p_adj_group = p.adjust(p_group, method = "BH"),
+    p_adj_stunt = p.adjust(p_stunt, method = "BH"))
+
+diff_results_sig_genus <- diff_results_genus_df %>%
+  filter(p_adj_group < 0.05 | p_adj_stunt < 0.05)
+
+write_xlsx(diff_results_sig_genus, "wilcox_genus_x_cazyme.xlsx")
+```
+
+#### Species
+TO DO:
+- make a table where rows are bacterial species and columns are different CAZymes with their abundances in each bacterial Species
+- make maybe bar plot of bacterial families and the proportions of different cazymes - or a heatmap idk yet
+```{r}
+# merge caz_abun_mags with mags_tax_qc
+cazymes_with_tax_species <- caz_abun_mags %>%
+  left_join(mags_tax_qc[, c("MAGs", "Species")], by = "MAGs") %>%
+  left_join(cazymes_annotations[, c("QUERY", "CAZY", "DESCRIPTION")], by = "QUERY")
+
+# sum across samples per Species x cazymes
+species_cazy_abun <- cazymes_with_tax_species %>%
+  group_by(Species, CAZY) %>% # can add description here if I need "uniques"
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# change empty genera to Unassigned
+species_cazy_abun <- species_cazy_abun %>%
+  mutate(Species = ifelse(Species == "", "Unassigned", Species))
+```
+
+```{r}
+# total abundance of each CAZyme in each bacterial Species
+species_cazyme_total <- species_cazy_abun %>%
+  rowwise() %>%
+  mutate(TotalAbundance = sum(c_across(where(is.numeric)))) %>%
+  select(Species, CAZY, TotalAbundance)
+
+# pivot wider to have cazymes Species
+species_cazy <- species_cazyme_total %>%
+  pivot_wider(names_from = CAZY, values_from = TotalAbundance, values_fill = 0)
+```
+
+
+```{r}
+# fill unknown 
+mag_abun_strep <- mag_abun_strep %>%
+  mutate(Species = ifelse(is.na(Species) | Species == "",
+    ifelse(!is.na(Genus) & Genus != "",
+           paste0(Genus, "_unassigned"),
+           paste0(Family, "_unassigned")),
+    Species))
+
+# change the one "_unassigned to order level
+mag_abun_strep <- mag_abun_strep %>%
+  mutate(Species = if_else(Species == "_unassigned", "TANB77_unassigned", Species))
+
+# by species
+mag_abun_strep_species <- mag_abun_strep[,-c(1:7)]
+
+# sum of merged abundances
+mag_abun_strep_species <- mag_abun_strep_species %>%
+  group_by(Species) %>% 
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# sum rows to find the most abundant
+mag_abun_strep_species <- mag_abun_strep_species %>%
+  mutate(TotalAbundance = rowSums(select(., where(is.numeric))))%>%
+  relocate(TotalAbundance, .after = Species)
+
+# top 10 most abundant species
+mag_abun_strep_species_50 <- mag_abun_strep_species %>%
+  arrange(desc(TotalAbundance)) %>% # descending order
+  slice_head(n = 50) # subset top 50
+
+# filter species_cazy_rel to the top 10 families with the most cazymes
+species_cazy_50 <- species_cazy %>%
+  filter(Species %in% mag_abun_strep_species_50$Species)
+```
+
+ALL species
+```{r}
+hm_cazymes_all_species <- species_cazy %>%
+  column_to_rownames(var = "Species") %>%
+  as.matrix()
+
+hm_cazymes_all_species_log <- log10(hm_cazymes_all_species +1)
+```
+
+```{r}
+hm_caz_species <- Heatmap(hm_cazymes_all_species_log,
+        name = "log10(abundance+1)",
+        col = hm_colours_all,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 10, fontface = "italic"),
+        column_names_gp = gpar(fontsize = 8),
+        column_title = "CAZymes",
+        row_title = "Species")
+hm_caz_species
+```
+
+heatmap
+```{r}
+hm_cazymes_species <- species_cazy_50 %>%
+  column_to_rownames(var = "Species") %>%
+  as.matrix()
+
+hm_cazymes_species_log <- log10(hm_cazymes_species +1)
+```
+
+```{r}
+hm_caz_species_50 <- Heatmap(hm_cazymes_species_log,
+        name = "log10(abundance+1)",
+        col = hm_colours,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 10, fontface = "italic"),
+        column_names_gp = gpar(fontsize = 8),
+        column_title = "CAZymes",
+        row_title = "Top 50 Species with the most CAZymes")
+hm_caz_species_50
+```
+
+GHs only
+```{r}
+# filter species_cazy to only have GHs
+species_ghs <- species_cazy %>%
+  select(Species, contains("GH"))
+```
+
+```{r}
+# need caz_abun_mags to be linked to taxonomy & CAZyme IDs
+# to taxonomies
+gh_abun_mags_species <- caz_abun_mags %>%
+    left_join(mags_tax %>%
+              select(MAGs, Kingdom, Phylum, Class, Order, Family, Genus, Species), by = "MAGs") %>%
+  relocate(Kingdom, Phylum, Class, Order, Family, Species, Species, .after = MAGs)
+# to CAZyme IDs
+gh_abun_mags_species <- gh_abun_mags_species %>%
+  left_join(cazymes_genes %>%
+              select(QUERY, CAZY, FAMILY, DESCRIPTION), by = "QUERY") %>%
+  relocate(CAZY, FAMILY, DESCRIPTION, .after = QUERY)
+
+# fill unknown 
+gh_abun_mags_species <- gh_abun_mags_species %>%
+  mutate(Species = ifelse(is.na(Species) | Species == "",
+    ifelse(!is.na(Genus) & Genus != "",
+           paste0(Genus, "_unassigned"),
+           paste0(Family, "_unassigned")),
+    Species))
+
+# change the one "_unassigned to order level (i checked)
+gh_abun_mags_species <- gh_abun_mags_species %>%
+  mutate(Species = if_else(Species == "_unassigned", "TANB77_unassigned", Species))
+
+# take off all taxonomy other than Species for now
+gh_abun_mags_species <- gh_abun_mags_species %>%
+  select(-Kingdom, -Phylum, -Class, -Order, -Genus, -Family)
+
+# filter for only GHs Glycoside hydrolases
+gh_abun_mags_species <- gh_abun_mags_species %>%
+  filter(FAMILY == "Glycoside hydrolases")
+
+# sum of merged abundances
+gh_abun_mags_species_total <- gh_abun_mags_species %>%
+  group_by(CAZY, Species) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# sum rows to find the most abundant
+gh_abun_mags_species_total <- gh_abun_mags_species_total %>%
+  mutate(TotalAbundance = rowSums(select(., where(is.numeric)))) %>%
+  relocate(TotalAbundance, .after = "Species")
+
+# take off CAZY & regroup by Species & resum abundances
+gh_abun_mags_species_total <- gh_abun_mags_species_total %>%
+  group_by(Species) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+  ungroup()
+
+# top 10 most abundant Genera
+gh_abun_mags_species_50 <- gh_abun_mags_species_total %>%
+  arrange(desc(TotalAbundance)) %>% # descending order
+  slice_head(n = 50) # subset top 10
+```
+
+```{r}
+species_ghs_50 <- species_ghs %>%
+  filter(Species %in% gh_abun_mags_species_50$Species)
+```
+
+GHs in ALL families
+```{r}
+hm_ghs_all_species <- species_ghs %>%
+  column_to_rownames(var = "Species") %>%
+  as.matrix()
+
+hm_ghs_all_species_log <- log10(hm_ghs_all_species +1)
+```
+
+```{r}
+hm_gh_species <- Heatmap(hm_ghs_all_species_log,
+        name = "log10(abundance+1)",
+        col = hm_colours_all_ghs,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 10, fontface = "italic"),
+        column_names_gp = gpar(fontsize = 8),
+        column_title = "Glycoside Hydrolases",
+        row_title = "Species")
+hm_gh_species
+```
+
+GHs in top 50 species
+```{r}
+hm_ghs_species_50 <- species_ghs_50 %>%
+  column_to_rownames(var = "Species") %>%
+  as.matrix()
+
+hm_ghs_species_50_log <- log10(hm_ghs_species_50 +1)
+```
+
+```{r}
+hm_gh_species_50 <- Heatmap(hm_ghs_species_50_log,
+        name = "log10(abundance+1)",
+        col = hm_colours_10_ghs,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        row_names_gp = gpar(fontsize = 10, fontface = "italic"),
+        column_names_gp = gpar(fontsize = 8),
+        column_title = "Glycoside Hydrolases (GHs)",
+        row_title = "Top 50 Species with the most GHs")
+hm_gh_species_50
+```
+
+```{r}
+diff_cazymes_species <- cazymes_with_tax_species %>%
+  select(CAZY, DESCRIPTION, Species, all_of(id_AP), all_of(id_P)) %>%
+  mutate(Species = ifelse(Species == "", "Unassigned", Species)) %>%
+  pivot_longer(cols = -c(CAZY, DESCRIPTION, Species),
+               names_to = "SampleID", values_to = "Abundance") %>%
+  group_by(SampleID, Species, CAZY, DESCRIPTION) %>%
+  summarise(Abundance = sum(Abundance, na.rm = TRUE), .groups = "drop") %>%
+  mutate(CAZyme = paste(CAZY, DESCRIPTION, sep = "__"))
+
+# add metadata
+diff_cazymes_species <- diff_cazymes_species %>%
+  left_join(md, by = "SampleID")
+```
+
+differential abundances for each cazyme/Species pair - is there a significant difference in abundance between *x* cazyme in *x* Species between AP/P and stunted/not stunted samples?
+```{r}
+diff_cazymes_results_species <- list()  # store results
+i <- 1  # row counter
+
+# unique cazyme/Species combos
+cazy_fam_combos_species <- unique(diff_cazymes_species[, c("CAZyme", "Species")])
+
+for (row in 1:nrow(cazy_fam_combos_species)) {
+  cazy_species <- cazy_fam_combos_species$CAZyme[row]
+  species <- cazy_fam_combos_species$Species[row]
+  
+  # dataaaa
+  subset_data <- diff_cazymes_species %>%
+    filter(CAZyme == cazy_species, Species == species)
+  
+  # wilcox group
+  p_group <- tryCatch(
+    wilcox.test(Abundance ~ group, data = subset_data)$p.value,
+    error = function(e) NA)
+  
+  # wilcox stunting
+  p_stunt <- tryCatch(
+    wilcox.test(Abundance ~ stunting, data = subset_data)$p.value,
+    error = function(e) NA)
+  
+  # store in df
+  diff_cazymes_results_species[[i]] <- data.frame(
+    CAZyme = cazy_species,
+    Species = species,
+    p_group = p_group,
+    p_stunt = p_stunt)
+  
+  i <- i + 1
+}
+
+# into df
+diff_results_species_df <- do.call(rbind, diff_cazymes_results_species)
+
+# adjust by BH
+diff_results_species_df <- diff_results_species_df %>%
+  mutate(
+    p_adj_group = p.adjust(p_group, method = "BH"),
+    p_adj_stunt = p.adjust(p_stunt, method = "BH"))
+
+diff_results_sig_species <- diff_results_species_df %>%
+  filter(p_adj_group < 0.08 | p_adj_stunt < 0.08)
+```
+
+
+
+
+
+
+# STREPTOCOCCI
+```{r}
+# make subset for streps - take from original physeq - I can calculate rel abun again
+physeq_strep <- subset_taxa(physeq, Genus == "Streptococcus")
+
+# relative abundances
+physeq_strep_rel <- transform_sample_counts(physeq_strep, function(x) x / sum(x))
+
+# extract strep abundances as df
+abun_strep <- as.data.frame(otu_table(physeq_strep_rel))
+```
+
+```{r}
+# extract taxonomy table of streps
+tax_strep <- as.data.frame(tax_table(physeq_strep_rel))
+# remove all columns other than Species
+tax_strep <- tax_strep %>% 
+  select(Species)
+# row names to column tax_strep
+tax_strep <- rownames_to_column(tax_strep, var = "MAG")
+```
+
+
+```{r}
+# row names to column abun_strep
+abun_strep <- rownames_to_column(abun_strep, var = "MAG")
+
+# add tax_strep to abun_strep using "MAG"
+abun_strep <- tax_strep %>%
+  left_join(abun_strep, by = "MAG")
+# take off "_" in the species names
+abun_strep$Species <- gsub("_", " ", abun_strep$Species)
+# put back column "MAG" to rownames
+abun_strep <- column_to_rownames(abun_strep, var = "MAG")
+
+# aggregate the data (there are multiple of the same species) into one unique species each and merge abundances of duplicates
+abun_strep_agg <- abun_strep %>%
+  group_by(Species) %>%
+  summarise(across(where(is.numeric), ~sum(.x, na.rm = TRUE)))
+```
+
+Stacked bar of streps
+```{r}
+# set species colours
+all_species <- unique(c(tax_table(physeq_strep_rel)[, "Species"]))
+
+num_spec <- length(all_species)
+
+#species_colours <- setNames(distinctColorPalette(num_spec), all_species)
+#length(species_colours) #should be 31
+#colours_species <- tibble(Species = all_species,
+#                      Colours = species_colours)
+# take off underscores
+#colours_species$Species <- gsub("_", " ", colours_species$Species)
+
+strep_species_colours <- c(
+  "Streptococcus agalactiae" = "plum1",
+  "Streptococcus anginosus" = "lightgreen",
+  "Streptococcus australis" = "wheat",
+  "Streptococcus constellatus" = "darkseagreen1",
+  "Streptococcus cristatus" = "thistle",
+  "Streptococcus dysgalactiae" = "gainsboro",
+  "Streptococcus gallolyticus" = "palegreen4",
+  "Streptococcus gordonii" = "moccasin",
+  "Streptococcus infantarius" = "steelblue",
+  "Streptococcus infantis" = "lightgray",
+  "Streptococcus intermedius" = "peru",
+  "Streptococcus lactarius" = "darkslategrey",
+  "Streptococcus lutetiensis" = "firebrick",
+  "Streptococcus mitis" = "gray57",
+  "Streptococcus mutans" = "palevioletred1",
+  "Streptococcus oralis" = "orchid1",
+  "Streptococcus parasanguinis" = "mediumslateblue",
+  "Streptococcus peroris" = "rosybrown1",
+  "Streptococcus pluranimalium" = "lightsteelblue1",
+  "Streptococcus pneumoniae" = "goldenrod1",
+  "Streptococcus pyogenes" = "mediumaquamarine",
+  "Streptococcus rubneri" = "lightskyblue",
+  "Streptococcus salivarius" = "lightgoldenrod2",
+  "Streptococcus sanguinis" = "lightcyan",
+  "Streptococcus sinensis" = "powderblue",
+  "Streptococcus sobrinus" = "peachpuff",
+  "Streptococcus sp F0442" = "aquamarine",
+  "Streptococcus sp HF 1907" = "tan",
+  "Streptococcus suis" = "mistyrose",
+  "Streptococcus thermophilus" = "lightsalmon",
+  "Streptococcus vestibularis" = "lemonchiffon2")
+
+```
+
+```{r}
+#convert data to long format
+abun_strep_long <- abun_strep_agg %>%
+  pivot_longer(cols = -Species, names_to = "SampleID", values_to = "Abundance")
+# add md
+md <- data.frame(past_meta) %>%
+  rownames_to_column(var = "SampleID")
+# mergr for facet_wrap
+abun_strep_long <- abun_strep_long %>%
+  left_join(md, by = "SampleID")
+
+# plot
+abun_strep_bar <- ggplot(abun_strep_long, aes(x = SampleID, y = Abundance, fill = Species)) +
+  geom_bar(stat = "identity", color = NA, position = "fill") + 
+  theme_linedraw() +
+  labs(title = "Relative Abundance of <i>Streptococcus</i> Species",
+       x = "Sample",
+       y = "Relative Abundance",
+       fill = "Species") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 10),
+        plot.title = element_markdown(size = 15, face = "bold"),  # italics
+        legend.text = element_text(size = 10, face = "italic"),
+        legend.title = element_text(size = 12, face = "bold"),
+        legend.key.size = unit(1.5, "lines")) +
+  guides(fill = guide_legend(ncol = 1)) +
+  scale_fill_manual(values = strep_species_colours) +
+  facet_wrap(~stunting, scales = "free_x")
+
+abun_strep_bar
+```
+
+box plot instead
+```{r}
+# calculate median abundance for ordering
+species_order <- abun_strep_long %>%
+  group_by(Species) %>%
+  summarise(median_abundance = median(Abundance, na.rm = TRUE)) %>%
+  arrange(desc(median_abundance)) %>%
+  pull(Species)
+
+# set the factor levels for Species
+abun_strep_long$Species <- factor(abun_strep_long$Species, levels = species_order)
+
+# plot
+abun_strep_box <- ggplot(abun_strep_long, 
+                         aes(x = Species, y = Abundance, 
+                             fill = Species, color = Species)) + 
+  geom_boxplot(alpha = 0.5) + 
+  theme_linedraw() +
+  labs(title = "<i>Streptococcus</i> species abundance across samples",
+       x = "Species",
+       y = "Relative Abundance (log<sub>10</sub>)") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 6, face = "italic"),
+        axis.title.y = element_markdown(),
+        plot.title = element_markdown(hjust = 0.5),
+        legend.text = element_text(face = "italic")) +
+  scale_y_log10() +
+  scale_color_manual(values = strep_species_colours) +
+  scale_fill_manual(values = strep_species_colours) +
+  guides(fill = "none", color = "none") +
+  facet_grid(stunting~group)
+
+abun_strep_box # looks messy with log
+```
+## wilcoxon tests
+```{r}
+df_streps <- psmelt(physeq_strep_rel)
+```
+
+```{r}
+# stunting status test
+wilcox_abun_strep <- df_streps %>%
+  group_by(Species) %>%
+  summarise(p_value = tryCatch(wilcox.test(Abundance ~stunting, exact = FALSE)$p.value,
+                               error = function(e) NA)) %>%
+  mutate(p_adjust = p.adjust(p_value, method = "BH"))
+
+wilcox_abun_strep_sig <- wilcox_abun_strep %>%
+  filter(p_adjust < 0.05) # nothing significant for p.adjust!!
+```
+
+```{r}
+# community test
+wilcox_abun_strep_group <- df_streps %>%
+  group_by(Species) %>%
+  summarise(p_value = tryCatch(wilcox.test(Abundance ~ group, exact = FALSE)$p.value,
+                               error = function(e) NA)) %>%
+  mutate(p_adjust = p.adjust(p_value, method = "BH"))
+
+wilcox_abun_strep_group_sig <- wilcox_abun_strep_group %>%
+  filter(p_adjust < 0.05) # nothing significant for p.adjust!!
+```
+
+## genes data
+```{r}
+# all the Streptococcus MAGs found in ALL the samples (just names)
+strep_MAGs <- fread("./DATA/List_MAGs_strep.txt", col.names = "QUERY")
+
+# genes found in all the Streptococcus
+strep_genes <- fread("./DATA/Strep_query.txt", col.names = "QUERY") # 43,348 genes
+
+# abundance of all these genes in each sample (already normalised)
+gene_abun <- as.data.frame(read_xlsx("./DATA/YERS23-2_gene_abundance.filtered.xlsx")) # 43,349 genes?
+setequal(strep_genes$QUERY, gene_abun$QUERY)
+cat(setdiff(gene_abun$QUERY, strep_genes$QUERY), sep = "\n")
+# add missing gene into strep_genes
+strep_genes <- rbind(strep_genes, data.table(QUERY = "YERS23-2_0000000218"))
+setequal(strep_genes$QUERY, gene_abun$QUERY) # now the same
+
+# change column name
+colnames(gene_abun)[1] <- "QUERY"
+gene_abun <- gene_abun %>%
+  select(-length) # take off length for now
+
+# clean the column name
+colnames(gene_abun) <- str_remove(colnames(gene_abun), "YERS23-2_")
+colnames(gene_abun) <- str_remove(colnames(gene_abun), "_METAG.genecount.profile")
+# fix column names
+colnames(gene_abun)[which(colnames(gene_abun)=="AP35C1")] <- "AP035C1"
+colnames(gene_abun)[which(colnames(gene_abun)=="P99C1")] <- "P099C1"
+
+# filter for final samples
+gene_abun <- gene_abun %>%
+  select(QUERY, all_of(final_samples))
+
+# GTDB taxonomy of each MAG (includes CheckM and ANVIO QCs) !!! DREPLICATED TO SPECIES LEVEL !!!
+tax_data <- read_xlsx("./DATA/dRep_MAGs_strep_species_TAX_QC.xlsx")
+
+# KEGG annotations of all the genes 
+kegg <- fread("./DATA/YERS23-2.kegg-annotations_Streptococcus.tsv") %>%
+  select(QUERY, KO, CAZY, ENZYME, PATHWAY, DESCRIPTION)
+```
+
+which genes are present in all the MAGs?
+```{r}
+# presence/absence matrix (abundance values > 0 = presence)
+pam_gene_abun <- gene_abun %>%
+  column_to_rownames(var = "QUERY")
+presence_absence_matrix <- ifelse(pam_gene_abun > 0, 1, 0)
+
+# number of samples (col)
+num_samples <- ncol(presence_absence_matrix)
+
+# find MAGs that are present in all samples (find rows where the 1s is the same as the total number of samples)
+shared_mags <- presence_absence_matrix[rowSums(presence_absence_matrix) == num_samples, ]
+
+# list of shared MAGs
+shared_mags_ID <- rownames(shared_mags)
+
+shared_mags_ID
+```
+Match the genes found in ALL MAGs to the KEGG
+```{r}
+# match KEGG annotations with shared genes
+matched_kegg <-  kegg %>%
+  filter(QUERY %in% shared_mags_ID)
+
+matched_kegg # only 1 cazyme and it's a GT :(
+```
+
+Filter for CAZymes
+CAZyme Families:
+- "GH" (Glycoside hydrolases)
+- "GT" (Glycosyltransferases)
+- "CBM" (Carbohydrate binding modules)
+- "CE" (Carbohydrate esterases)
+- "AA" (Auxiliary activities)
+- "PL" (Polysaccharide lyases)
+```{r}
+cazymes_strep <- kegg %>%
+  filter(str_detect(CAZY, "cazy:")) # 543 CAZymes
+
+# take off cazy:s
+cazymes_strep <- cazymes_strep %>%
+  mutate(CAZY = str_replace_all(CAZY, "cazy:", ""))
+
+# new column for each family
+cazymes_strep$FAMILY <- ifelse(grepl("GH", cazymes_strep$CAZY), "Glycoside hydrolases",
+                  ifelse(grepl("GT", cazymes_strep$CAZY), "Glycosyltransferases",
+                  ifelse(grepl("CBM", cazymes_strep$CAZY), "Carbohydrate binding modules",
+                  ifelse(grepl("CE", cazymes_strep$CAZY), "Carbohydrate esterases",
+                  ifelse(grepl("AA", cazymes_strep$CAZY), "Auxiliary activities",
+                  ifelse(grepl("PL", cazymes_strep$CAZY), "Polysaccharide lyases", NA))))))
+print(unique(cazymes_strep$FAMILY)) # no AA or PLs
+
+# remove NA
+cazymes_strep <- cazymes_strep %>%
+  mutate(CAZY = str_remove_all(CAZY, "---NA")) %>%
+  relocate(FAMILY, .after = CAZY)
+```
+
+Find the abundance of strep CAZymes
+```{r}
+# filter gene_abun to only have CAZyme genes 
+cazymes_strep_ID <- cazymes_strep$QUERY
+cazymes_strep_abun <- pam_gene_abun[rownames(pam_gene_abun) %in% cazymes_strep_ID, ] # should be 543
+```
+
+## analysis
+```{r}
+# row names to a column in cazymes_abun
+cazymes_strep_abun_df <- as.data.frame(cazymes_strep_abun) %>%
+  rownames_to_column(var = "QUERY")
+
+# abubndances by family
+strep_family_abun <- cazymes_strep_abun_df %>%
+  left_join(cazymes_strep %>% # add family info
+              select(QUERY, FAMILY, DESCRIPTION), by = "QUERY") %>%
+  group_by(DESCRIPTION, FAMILY) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE),  # sum abundances by description and family
+    .groups = "drop") %>%
+  pivot_longer(cols = -c(DESCRIPTION, FAMILY),  # long format
+               names_to = "SampleID",
+               values_to = "Abundance") %>%
+  left_join(md, by = "SampleID") # add md
+```
+
+```{r}
+# stacked bar plot for family
+strep_fam_bar <- ggplot(strep_family_abun, aes(x = SampleID, y = Abundance, fill = FAMILY)) +
+  geom_bar(stat = "identity", position = "fill") +
+  labs(title = "CAZyme abundances in <i>Streptococci</i>",
+       subtitle = "<i>by Family</i>",
+       x = "Sample",
+       y = "Relative Abundance",
+       fill = "CAZyme Family") +
+  theme_linedraw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 10),
+        axis.title.x = element_text(size = 10),
+        axis.title.y = element_text(size = 10),
+        plot.title = element_markdown(size = 15, face = "bold"),
+        plot.subtitle = element_markdown(size = 12, colour = "firebrick")) +
+  scale_fill_manual(values = caz_fam_cols) +
+  facet_wrap(~stunting, scales = "free_x")
+
+strep_fam_bar
+```
+
+box separated by group and stunting status
+```{r}
+strep_fam_box <- ggplot(strep_family_abun, aes(x = FAMILY, y = Abundance, fill = FAMILY, color = FAMILY)) +
+  geom_boxplot(alpha = 0.5) +
+  labs(title = "CAZyme Family distribution within <i>Streptococci</i> across samples",
+       x = "CAZyme Family",
+       y = "Abundance (log<sub>10</sub>)",
+       color = "CAZyme Family") +
+  theme_linedraw() +
+  scale_y_log10() +
+  theme(axis.title.y = element_markdown(size = 10),
+        axis.text.y = element_text(size = 8),
+        axis.text.x = element_blank(),
+        plot.title = element_markdown(size = 15, face = "bold"),
+        legend.text = element_text(size = 10),
+        legend.title = element_text(size = 12, face = "bold")) +
+  scale_fill_manual(values = caz_fam_cols, guide = "none") + # hide legned
+  scale_color_manual(values = caz_fam_cols) + # hide legend 
+  facet_grid(stunting~group)
+
+strep_fam_box
+```
+wilcoxon tests
+```{r}
+# is there a sig differences in the abundance of different CAZYmme families (based on description too) in different stunting statuses
+wilcox_caz_fam_stun_strep <- strep_family_abun %>%
+  group_by(FAMILY, DESCRIPTION) %>%
+  summarise(p_value = wilcox.test(Abundance ~ stunting)$p.value) %>%
+  mutate(p_adjusted = p.adjust(p_value, method = "BH"))
+
+wilcox_caz_fam_stun_strep_sig <- wilcox_caz_fam_stun_strep %>%
+  filter(p_adjusted <0.05) # only 1
+
+wilcox_caz_fam_stun_strep_sig
+```
+
+```{r}
+# is there a sig differences in the abundance of different CAZYme families (based on description too) in different communities
+wilcox_caz_fam_group_strep <- strep_family_abun %>%
+  group_by(FAMILY, DESCRIPTION) %>%
+  summarise(p_value = wilcox.test(Abundance ~ group)$p.value) %>%
+  mutate(p_adjusted = p.adjust(p_value, method = "BH"))
+
+wilcox_caz_fam_group_strep_sig <- wilcox_caz_fam_group_strep %>%
+  filter(p_adjusted <0.05) # the same CE as above
+
+wilcox_caz_fam_group_strep_sig
+```
+
+### most abundant CAZymes in streps - (horizontal bars)
+- which CAZymes are the most abundant in all samples?
+uniques based on each "unique" DESCRIPTION, not each CAZY
+```{r}
+# use cazymes_strep_abun and change anything >0 to be 1 for binary presence/absence data
+strep_cazymes_binary <- cazymes_strep_abun %>%
+  mutate(across(1:ncol(.), ~ ifelse(. > 0, 1, 0))) %>%
+  rownames_to_column(var = "QUERY")
+
+# add CAZY, FAMILY and DESCRIPTION from cazymes_annotations based on QUERY
+strep_cazymes_binary <- strep_cazymes_binary %>%
+  left_join(cazymes_strep %>% select(QUERY, CAZY, FAMILY, DESCRIPTION), 
+            by = "QUERY") %>%
+  relocate(CAZY, FAMILY, DESCRIPTION, .after = QUERY)
+
+# merge together anything that has the same DESCRIPTION (will end up with no QUERY, but I don't need anymore)
+strep_cazymes_binary_merged <- strep_cazymes_binary %>%
+  group_by(DESCRIPTION) %>%
+  summarise(across(where(is.numeric), first),  # keep first occurrence of numeric values
+            CAZY = paste(unique(CAZY), collapse = ", "),  
+            FAMILY = paste(unique(FAMILY), collapse = ", ")) %>%
+  ungroup() %>%
+  relocate(CAZY, FAMILY, .before = DESCRIPTION) # 64 CAZymes of unique description
+```
+
+
+```{r}
+# make sideways bar
+strep_cazymes_for_bar <- strep_cazymes_binary_merged[,-c(2:3)]
+
+# sum up abundances for bar
+strep_cazymes_for_bar <- strep_cazymes_for_bar %>%
+  mutate(TotalAbundance = rowSums(select(., 2:ncol(.)), na.rm = TRUE))
+
+# select just cazyme and total abundance
+strep_cazymes_for_bar <- strep_cazymes_for_bar %>%
+  select(CAZY, TotalAbundance)
+
+# merge together the same CAZymes 
+strep_cazymes_for_bar_merged <- strep_cazymes_for_bar %>%
+  group_by(CAZY) %>%
+  summarise(Abundance = sum(TotalAbundance, na.rm = TRUE), .groups = "drop") # 37 CAZymes
+```
+
+
+### unique CAZymes within streps in ALL samples
+```{r}
+# bar
+strep_unique_bar <- ggplot(strep_cazymes_for_bar_merged, aes(x = reorder(CAZY, Abundance), y = Abundance)) + 
+  geom_bar(stat = "identity", fill = "cornflowerblue") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique CAZymes within <i>Streptococci</i>") +
+  theme(
+    axis.text.y = element_text(size = 8, face = "bold"),
+    plot.title = element_markdown(size = 15, face = "bold"),
+    legend.position = "none") +
+  ylim(0, 350)
+
+strep_unique_bar
+```
+
+#### Top GHs in Streps in ALL samples
+GHs only
+```{r}
+# filter for GHS
+strep_cazymes_for_bar_merged_GH <- strep_cazymes_for_bar_merged %>%
+  filter(str_detect(CAZY, "GH"))
+
+# bar
+strep_unique_bar_GH <- ggplot(strep_cazymes_for_bar_merged_GH, aes(x = reorder(CAZY, Abundance), y = Abundance)) + 
+  geom_bar(stat = "identity", fill = "salmon") +
+  coord_flip() + # horizontal bar
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Counts of unique Glycoside Hydrolases within <i>Streptococci</i>") +
+  theme(
+    axis.text.y = element_text(size = 8, face = "bold"),
+    plot.title = element_markdown(size = 15, face = "bold"),
+    legend.position = "none")+
+  ylim(0, 350)
+
+strep_unique_bar_GH
+```
+
+### how many UNIQUE CAZymes does each sample have within Streptococci, comparing stunted and non-stunted children?
+samples instead of CAZymes
+```{r}
+# transpose 
+strep_cazymes_binary_trans <- t(strep_cazymes_binary_merged)
+# don't need CAZY, FAMILY or DESCRIPTION for now
+sample_strep_cazymes <- as.data.frame(strep_cazymes_binary_trans[-c(1:3),])
+
+# sum up abundances for bar
+sample_strep_cazymes[] <- lapply(sample_strep_cazymes, function(x) as.numeric(as.character(x)))
+sample_strep_cazymes$COUNTS <- rowSums(sample_strep_cazymes)
+
+sample_strep_cazymes <- sample_strep_cazymes %>%
+  rownames_to_column("SampleID")
+
+strep_sample_cazymes_total <- sample_strep_cazymes %>%
+  select(SampleID, COUNTS)
+# add some metadata
+strep_sample_cazymes_meta <- strep_sample_cazymes_total %>%
+  left_join(md, by = "SampleID")
+```
+
+```{r}
+# stunting status 
+strep_sample_bar <- ggplot(strep_sample_cazymes_meta, aes(x = reorder(SampleID, COUNTS), y = COUNTS, fill = stunting)) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +  # horizontal bars
+  theme_linedraw() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Count of unique CAZymes within <i>Streptococci</i> in each sample",
+       fill = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 8),
+        plot.title = element_markdown(size = 15, face = "bold")) +
+  scale_fill_manual(values = stun_colours)
+
+strep_sample_bar
+```
+
+only in AP samples
+```{r}
+# AP
+strep_sample_cazymes_AP <- strep_sample_cazymes_meta %>%
+  filter(str_detect(SampleID, "AP"))
+
+strep_sample_bar_stunting_AP <- ggplot(strep_sample_cazymes_AP, aes(x = reorder(SampleID, COUNTS), y = COUNTS, fill = stunting)) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Count of unique CAZymes within <i>Streptococci</i> in Agro-Pastoralist samples",
+       fill = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 8),
+        plot.title = element_markdown(size = 12, face = "bold")) +
+  scale_fill_manual(values = stun_colours) 
+
+strep_sample_bar_stunting_AP
+```
+only P samples
+```{r}
+# P
+strep_sample_cazymes_P <- strep_sample_cazymes_meta %>%
+  filter(!str_detect(SampleID, "A"))
+
+# bar
+strep_sample_bar_stunting_P <- ggplot(strep_sample_cazymes_P, aes(x = reorder(SampleID, COUNTS), y = COUNTS, fill = stunting)) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Count of unique CAZymes within <i>Streptococci</i> in Pastoralist samples",
+        fill = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 8),
+        plot.title = element_markdown(size = 12, face = "bold")) +
+  scale_fill_manual(values = stun_colours) 
+
+strep_sample_bar_stunting_P
+```
+### how many UNIQUE GHs does each sample have within their streps, comparing stunted and non-stunted children?
+```{r}
+strep_sample_cazymes_GH <- strep_cazymes_binary_merged %>%
+  filter(str_detect(CAZY, "GH"))
+
+strep_sample_cazymes_GH_trans <- t(strep_sample_cazymes_GH)
+strep_sample_cazymes_GH_trans <- as.data.frame(strep_sample_cazymes_GH_trans[-c(1:3),])
+
+# sum up abundances for bar
+strep_sample_cazymes_GH_trans[] <- lapply(strep_sample_cazymes_GH_trans, function(x) as.numeric(as.character(x)))
+strep_sample_cazymes_GH_trans$COUNTS <- rowSums(strep_sample_cazymes_GH_trans)
+
+strep_sample_cazymes_GH_trans <- strep_sample_cazymes_GH_trans %>%
+  rownames_to_column("SampleID")%>%
+  select(SampleID, COUNTS)
+
+# add some metadata
+strep_sample_cazymes_GH_trans <- strep_sample_cazymes_GH_trans %>%
+  left_join(md, by = "SampleID")
+```
+
+```{r}
+# bar
+strep_sample_GH_bar <- ggplot(strep_sample_cazymes_GH_trans, aes(x = reorder(SampleID, COUNTS), y = COUNTS, fill = stunting)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +  # Horizontal bars
+  theme_light() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Count of unique GHs within <i>Streptococci</i> in each sample",
+       fill = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 8),
+        plot.title = element_markdown(size = 15, face = "bold")) +
+  scale_fill_manual(values = gh_stun_colours) 
+
+strep_sample_GH_bar
+```
+
+only in AP samples
+```{r}
+strep_sample_GH_AP <- strep_sample_cazymes_GH_trans %>%
+  filter(str_detect(SampleID, "AP"))
+# bar
+strep_sample_bar_stunting_GH_AP <- ggplot(strep_sample_GH_AP, aes(x = reorder(SampleID, COUNTS), y = COUNTS, fill = stunting)) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Count of unique GHs within <i>Streptococci</i> in Agro-Pastoralist samples",
+       fill = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 8),
+        plot.title = element_markdown(size = 12, face = "bold")) +
+  scale_fill_manual(values = gh_stun_colours) 
+
+strep_sample_bar_stunting_GH_AP
+```
+only P samples
+```{r}
+strep_sample_GH_P <- strep_sample_cazymes_GH_trans %>%
+  filter(!str_detect(SampleID, "A"))
+# bar
+strep_sample_bar_stunting_GH_P <- ggplot(strep_sample_GH_P, aes(x = reorder(SampleID, COUNTS), y = COUNTS, fill = stunting)) +
+  geom_bar(stat = "identity") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = NULL,
+       y = "Counts",
+       title = "Count of unique GHs within <i>Strepococci</i> in Pastoralist samples",
+       fill = "Stunting Status") +
+  theme(axis.text.y = element_text(size = 8),
+        plot.title = element_markdown(size = 12, face = "bold")) +
+  scale_fill_manual(values = gh_stun_colours) 
+
+strep_sample_bar_stunting_GH_P
+```
+
+### how many UNIQUE CAZymes does each bacterial species have? (sideways bar)
+```{r}
+# origin of CAZymes
+strep_origin <- fread("./DATA/YERS23-2.clstr.filtered.txt")
+# rename columns
+colnames(strep_origin) <- c("QUERY","RepMem","Origin","Length","Stat")
+
+# take off "YERS23-2_"
+strep_origin <- strep_origin %>%
+  mutate(Origin = str_remove(Origin, "YERS23-2_"))
+
+# add a column with the MAG name without the scaffold number
+strep_origin <- strep_origin %>%
+  mutate(as.data.frame(str_split_fixed(Origin, "\\-s", n = 2)))
+# delete scaffodd column
+strep_origin <- strep_origin[, -7]
+# rename column 6 to "MAGs"
+colnames(strep_origin)[6] <- "MAGs"
+# move MAGs column next to QUERY so it's easier to see
+strep_origin <- strep_origin %>%
+  relocate(MAGs, .after = QUERY)
+
+# filter for only final_samples
+strep_origin$SampleID <- sub("_.*", "", strep_origin$Origin)
+n_distinct(strep_origin$SampleID) # only 284 samples instead of 346??? does that mean that the strep genes were only found in this many samples?
+
+# fix names in SampleID
+strep_origin$SampleID[which(strep_origin$SampleID=="P99C1")] <- "P099C1"
+strep_origin$SampleID[which(strep_origin$SampleID=="AP11C1")] <- "AP011C1"
+strep_origin$SampleID[which(strep_origin$SampleID=="AP12C1")] <- "AP012C1"
+strep_origin$SampleID[which(strep_origin$SampleID=="AP35C1")] <- "AP035C1"
+strep_origin$SampleID[which(strep_origin$SampleID=="AP42C1")] <- "AP042C1"
+strep_origin$SampleID[which(strep_origin$SampleID=="P26C2")] <- "P026C2"
+strep_origin$SampleID[which(strep_origin$SampleID=="P32C1")] <- "P032C1"
+strep_origin$SampleID[which(strep_origin$SampleID=="P63C2")] <- "P063C2"
+strep_origin <- strep_origin %>%
+  filter(SampleID %in% final_samples)
+# check all samples are there
+n_distinct(strep_origin$SampleID) # only 79 samples, not 94?
+
+# how many MAGs have one or more CAZyme genes of interest?
+n_distinct(strep_origin$MAGs) # 144 MAGs have one or several CAZymes genes of interest in streptococciin the 94 samples I am using
+```
+
+all streps taxonomy
+```{r}
+streps_all_tax <- read_xlsx("./DATA/MAGs_Streptococcus_TAX_QC_MD.xlsx")
+# rename GENOME to MAGs
+colnames(streps_all_tax)[2] <- "MAGs"
+# take off "YERS23-2_"
+streps_all_tax <- streps_all_tax %>%
+  mutate(MAGs = str_remove(MAGs, "YERS23-2_"))
+# filter for final_samples
+streps_all_tax <- streps_all_tax %>%
+  filter(SampleID %in% final_samples)
+n_distinct(streps_all_tax$SampleID) # still only 79 samples
+```
+
+
+```{r}
+# subset of strep_origin with only QUERY & MAGs columns
+strep_taxa_cazy <- strep_origin %>%
+  select(QUERY, MAGs)
+
+# add CAZY, FAMILY and DESCRIPTION from cazymes_annotations to the subset based on QUERY
+strep_taxa_cazy <- strep_taxa_cazy %>%
+  left_join(cazymes_strep %>% select(QUERY, CAZY, FAMILY, DESCRIPTION), 
+            by = "QUERY")
+# take out nas
+strep_taxa_cazy <- strep_taxa_cazy %>%
+  filter(!is.na(CAZY))
+
+# add Kingdom, Phylum, Class, Order, Family, Genus & Species from mags_tax_qc into subset based on MAGs
+strep_taxa_cazy <- strep_taxa_cazy %>%
+  left_join(streps_all_tax %>% select(MAGs, Kingdom, Phylum, Class, Order, Family, Genus, Species), 
+            by = "MAGs")
+# no need for QUERY anymore
+strep_taxa_cazy <- strep_taxa_cazy[,-1]
+
+# merge anything with the same DESCRIPTION and MAGs together
+strep_taxa_cazy_merged <- strep_taxa_cazy %>%
+  group_by(DESCRIPTION, MAGs) %>%
+  summarise(
+    CAZY = paste(unique(CAZY), collapse = ", "),
+    FAMILY = paste(unique(FAMILY), collapse = ", "),
+    Kingdom = first(Kingdom),
+    Phylum = first(Phylum),
+    Class = first(Class),
+    Order = first(Order),
+    Family = first(Family),
+    Genus = first(Genus),
+    Species = first(Species),
+    .groups = "drop")
+# 2295
+
+# change NAs to strep sp.
+strep_taxa_cazy_merged <- strep_taxa_cazy_merged %>%
+  mutate(Family = if_else(Species == "", "Streptococcus sp.", Family))
+
+
+# count how many CAZY with the same Family and make a table from it 
+cazy_strep_table <- strep_taxa_cazy_merged %>%
+  group_by(Species) %>%
+  summarise(Count = n()) %>%
+  arrange(desc(Count))
+
+# take off the one NA
+cazy_strep_table <- cazy_strep_table %>%
+  filter(!is.na(Species))
+```
+
+sideways bar of Species x UNIQUE CAZymes
+```{r}
+cazy_strep_bar <- ggplot(cazy_strep_table, aes(x = reorder(Species, Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "cornflowerblue") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = "Species",
+       y = "Counts",
+       title = "Unique CAZymes in every <i>Streptococcus</i> species") +
+  theme(axis.text.y = element_text(size = 8, face = "bold.italic"),
+        plot.title = element_markdown(size = 15, face = "bold"))
+
+cazy_strep_bar
+```
+GHs only
+```{r}
+# filter taxa_cazy_merged to only have GHs
+strep_taxa_cazy_merged_GH <- strep_taxa_cazy_merged %>%
+  filter(str_detect(CAZY, "GH"))
+
+# count how many GH with the same Family and make a table from it 
+cazy_strep_table_GH <- strep_taxa_cazy_merged_GH %>%
+  group_by(Species) %>%
+  summarise(Count = n()) %>%
+  arrange(desc(Count))
+
+# take off the one NA
+cazy_strep_table_GH <- cazy_strep_table_GH %>%
+  filter(!is.na(Species))
+
+# bar
+cazy_strep_bar_GH <- ggplot(cazy_strep_table_GH, aes(x = reorder(Species, Count), y = Count)) +
+  geom_bar(stat = "identity", fill = "salmon") + 
+  coord_flip() +  # horizontal bars
+  theme_light() +
+  labs(x = "Species",
+       y = "Counts",
+       title = "Unique GHs in every <i>Streptococcus</i> species") +
+  theme(axis.text.y = element_text(size = 8, face = "bold.italic"),
+        plot.title = element_markdown(size = 15, face = "bold"))
+
+cazy_strep_bar_GH
+```
+
+
+
+

@@ -1,0 +1,898 @@
+---
+title: "filtered_LEfSe&ANCOMBC"
+author: "Jazmine Mote"
+date: "2025-05-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+setwd("/Volumes/RECHERCHE/FAC/FBM/DMF/pvonaesc/default/D2c/Jazmine Mote")
+
+if(!requireNamespace("BiocManager")){
+  install.packages("BiocManager")
+}
+#BiocManager::install("ANCOMBC", force = TRUE)
+library(ANCOMBC)
+
+library(phyloseq)
+library(data.table)
+library(tidyverse)
+library(ggtext)
+library(readxl)
+library(microbiomeMarker)
+```
+
+# DATA
+```{r}
+final_samples <- c("AP007C1", "AP013C1", "AP014C1", "AP017C2", "AP018C1", # AP stunted
+                   "AP018C2", "AP022C1", "AP026C1", "AP040C1", "AP049C1",
+                   "AP050C1", "AP066C1", "AP066C2", "AP069C1", "AP077C1",
+                   "AP078C1", "AP091C1", "AP094C1", "AP124C1", "AP132C1", 
+                   "AP133C1", "AP133C2", "AP138C1", "AP141C1", "AP148C1", "AP151C1", 
+                   "AP006C1", "AP023C1", "AP034C1", "AP041C1", "AP052C1", # AP not stunted
+                   "AP055C1", "AP074C1", "AP081C1", "AP084C1", "AP092C1", 
+                   "AP096C1", "AP109C1", "AP111C1", "AP116C1", "AP120C1",
+                   "AP123C1", "AP125C1", "AP127C1", "AP130C1", "AP131C1",
+                   "AP137C1", "AP143C1", "AP144C1", "AP154C1", "AP159C1", "AP035C1",
+                   "P002C1", "P007C1", "P020C1", "P032C3", "P038C2", # P stunted
+                   "P052C1", "P052C2", "P057C1", "P060C1", "P070C1",
+                   "P076C1", "P095C1", "P097C1", "P102C2", "P108C1",
+                   "P109C2", "P111C1", "P115C1", "P121C1", "P128C1", "P099C1",
+                   "P003C1", "P003C2", "P014C1", "P016C1", "P016C2", # P not stunted
+                   "P017C1", "P042C1", "P044C1", "P044C2", "P046C2",
+                   "P054C1", "P056C1", "P056C2", "P068C1", "P073C1",
+                   "P073C2", "P073C3", "P075C1", "P082C1", "P103C1", "P123C2")
+
+stun_colours <- c("Stunted" = "lightgoldenrod2", "Not Stunted" = "mediumaquamarine")
+  
+group_colours <- c("Pastoralist" = "cornflowerblue", "Agro-Pastoralist" = "salmon")
+```
+
+#------------------------------------Phyloseq-----------------------------------
+physeq = original phyloseq with methaphlan abundances (absolute abundance)
+physeq_rel = physeq with relative abundancees
+## Taxonomy Table
+```{r}
+# # how much of each organism was found in each sample (for calculating rel abundances etc.)
+tax_table <- fread("./DATA/PASTOBIOME_metaphlan_relab.txt") 
+
+# take off _metaphlan4 from colnames
+colnames(tax_table) <- str_remove(colnames(tax_table), "_metaphlan4")
+
+# filter to final_samples
+tax_table <- tax_table %>%
+  rename_with(~ case_when(
+    . == "AP11C1" ~ "AP011C1",
+    . == "AP12C1" ~ "AP012C1",
+    . == "AP35C1" ~ "AP035C1",
+    . == "AP42C1" ~ "AP042C1",
+    . == "P26C2"  ~ "P026C2",
+    . == "P32C1"  ~ "P032C1",
+    . == "P63C2"  ~ "P063C2",
+    . == "P99C1"  ~ "P099C1",
+    TRUE ~ .)) %>%
+  select(clade_name, all_of(final_samples))
+
+
+# make a new table with only taxonomy names, split clade_name into 8 parts based on the "" pattern
+tax_names <- str_split_fixed(tax_table$clade_name, "\\|[p,c,o,f,g,s,t]__", 8) 
+tax_names <- as.data.frame(tax_names)
+# remove "k__" from kingdom
+tax_names[,1] <- str_remove(tax_names[,1], "k__") 
+
+# change column names (SGB = Species-level Genome Bins)
+colnames(tax_names) <- c("Kingdom", "Phylum", "Class","Order","Family","Genus","Species", "SGB")
+
+# add row names (name MAGs [metagenome-assembled genomes])
+tax_names <- tax_names %>%
+  mutate(MAGs = paste("MAG", seq(1:nrow(tax_names)), sep=""))
+# list of MAGs
+MAGs_num <- tax_names$MAGs 
+
+# change row names to MAGs
+tax_names <- tax_names %>%
+  column_to_rownames(var = "MAGs")
+
+# create a taxonomy table, similar to one obtained using DADA2
+tax_names <- as.matrix(tax_names)
+
+#-------------------------------------------------------------------------------
+# PHYLOSEQ - set as the tax_table
+taxonomy_table <- tax_table(tax_names)
+```
+
+## Abundance Table (OTU table)
+```{r}
+# make & format abundance table using tax_table
+abun_table <- cbind(str_split_fixed(tax_table$clade_name, "\\|[p,c,o,f,g,s,t]__", 8),tax_table)
+# turn abun_table into a df
+abun_table <- as.data.frame(abun_table)
+# remove "k__" from the Kingdom column
+abun_table[,1] <- str_remove(abun_table[,1], "k__")
+
+# assign MAGs_num as row names of abun_table
+rownames(abun_table) <- MAGs_num 
+
+# remove columns 1-10 to only have the abundance data
+abun_table <- abun_table[,-c(1:9)]
+# we are now left with a table with columns that correlate to each samples
+# row names will correlate to the MAGs assigned to the bacteria in the tax_table
+
+#-------------------------------------------------------------------------------
+# PHYLOSEQ - set as the otu_table
+abun_table <- as.matrix(abun_table)
+class(abun_table) <- "numeric"
+abundance_table = otu_table(abun_table, taxa_are_rows = TRUE)
+```
+
+## Metadata
+```{r}
+# metadata
+metadata <- as.data.frame(read_xlsx("./DATA/Pastobiome_metadata_final.xlsx"))
+
+# filter to only data I need
+metadata <- metadata %>%
+  select(SampleID, group, gender, age_months, age_group, stunting, hfaz, wasting_st, wfaz, wfhz)
+
+# make SampleID as rownames
+metadata <- column_to_rownames(metadata, var = "SampleID")
+
+# change "Yes" to "Stunted" and "No" to "Non-Stunted"
+metadata <- metadata %>%
+  mutate(stunting = ifelse(stunting == "No", "Not Stunted", 
+                           ifelse(stunting == "Yes", "Stunted", stunting)))
+
+# filter for my samples
+metadata <- metadata[rownames(metadata) %in% final_samples, ]
+
+# set metadata as phyloseq object
+md <- sample_data(metadata)
+
+identical(rownames(md), colnames(abundance_table)) # needs to be true
+
+# compare names
+setdiff(colnames(abundance_table), rownames(md)) # which columns are in abun_table but not in md
+setdiff(rownames(md), colnames(abundance_table)) # which rows in md but not in abun_table
+
+# reorder past_meta to be the same as the col names of abundance_table
+md <- md[colnames(abundance_table), ]
+
+# take 2
+identical(rownames(md), colnames(abundance_table)) # needs to be true
+```
+
+## Make phyloseqs
+```{r}
+physeq <- phyloseq(taxonomy_table, abundance_table, md)
+
+physeq # 6048 taxa and 94 samples
+```
+
+
+```{r}
+#physeq_rel <- transform_sample_counts(physeq, function(x) x / sum(x))
+physeq <- tax_glom(physeq, "Species")
+
+# remove taxa not present in any samples
+physeq <- subset_taxa(physeq, taxa_sums(physeq) > 0)
+physeq # left with 1418 taxa and 94 samples
+
+# take off SGB (Simon says it doesn't like it)
+tax_table(physeq) <- tax_table(physeq)[, -8]
+
+# assign unknown taxonomy to those before
+tax_physeq <- as.data.frame(tax_table(physeq))
+tax_physeq <- tax_physeq %>%
+   mutate(Species = case_when(!str_detect(Species, "GGB") ~ Species,
+                              !str_detect(Genus, "GGB") ~ Species,
+                              !str_detect(Family, "FGB") ~ paste(Family, Species),
+                              !str_detect(Order, "OFGB") ~ paste(Order, Species),
+                              !str_detect(Class, "CFGB") ~ paste(Class, Species),
+                              str_detect(Class, "CFGB") ~ paste(Phylum, Species),
+                              TRUE ~ Species))
+
+tax_table(physeq) <- as.matrix(tax_physeq)
+```
+
+## subsets of phyloseqs
+```{r}
+# only not stunted
+physeq_nstun <- subset_samples(physeq, stunting == "Not Stunted")
+
+# only stunted
+physeq_stun <- subset_samples(physeq, stunting == "Stunted")
+
+# only AP samples
+AP <- subset_samples(physeq, group == "Agro-Pastoralist")
+
+# only P samples
+P <- subset_samples(physeq, group == "Pastoralist")
+```
+
+#----------------------------Differential Abundances----------------------------
+## LEfSe - stunted & non stunted separated
+### "healthy" samples
+Genus
+```{r}
+healthy_lefse <- run_lefse(physeq_nstun,
+                           wilcoxon_cutoff = 0.05,
+                           group = "group",
+                           taxa_rank = "Genus",
+                           kw_cutoff = 0.05,
+                           multigrp_strat = FALSE,
+                           lda_cutoff = 4)
+
+healthy_lefse_plot <- plot_ef_bar(healthy_lefse) +
+  labs(title = "Differential taxa in <i>'healthy'</i> samples - Genus",
+       subtitle = "Agro-Pastoralist vs. Pastoralist (LEfSe analysis)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_markdown(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Agro-Pastoralist" = "firebrick", "Pastoralist" = "midnightblue"))
+healthy_lefse_plot
+```
+
+Species
+```{r}
+healthy_lefse_spec <- run_lefse(physeq_nstun,
+                           wilcoxon_cutoff = 0.05,
+                           group = "group",
+                           taxa_rank = "Species",
+                           kw_cutoff = 0.05,
+                           multigrp_strat = FALSE,
+                           lda_cutoff = 4)
+
+healthy_lefse_spec_plot <- plot_ef_bar(healthy_lefse_spec) +
+  labs(title = "Differential taxa in <i>non-stunted</i> samples",
+       subtitle = "Agro-Pastoralist vs. Pastoralist (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Species") +
+  theme_linedraw() +
+  theme(plot.title = element_markdown(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Agro-Pastoralist" = "firebrick", "Pastoralist" = "midnightblue"))
+healthy_lefse_spec_plot
+```
+
+### ONLY Stunted samples
+Genus
+```{r}
+lefse_stun <- run_lefse(physeq_stun,
+                   wilcoxon_cutoff = 0.05,
+                   group = "group",
+                   taxa_rank = "Genus",
+                   kw_cutoff = 0.05,
+                   multigrp_strat = FALSE,
+                   lda_cutoff = 4)
+
+lefse_stun_plot <- plot_ef_bar(lefse_stun) +
+  labs(title = "Differential taxa in <i>stunted</i> samples - Genus",
+       subtitle = "Agro-Pastoralist vs. Pastoralist (LEfSe analysis)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_markdown(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Agro-Pastoralist" = "lightpink", "Pastoralist" = "lightblue"))
+lefse_stun_plot
+```
+
+Species
+```{r}
+lefse_stun_spec <- run_lefse(physeq_stun,
+                   wilcoxon_cutoff = 0.05,
+                   group = "group",
+                   taxa_rank = "Species",
+                   kw_cutoff = 0.05,
+                   multigrp_strat = FALSE,
+                   lda_cutoff = 4) # how important or discriminative a species is in distinguishing the groups based on their abundance.
+
+lefse_stun_spec_plot <- plot_ef_bar(lefse_stun_spec) +
+  labs(title = "Differential taxa in <i>stunted</i> samples",
+       subtitle = "Agro-Pastoralist vs. Pastoralist (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Species") +
+  theme_linedraw() +
+  theme(plot.title = element_markdown(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Agro-Pastoralist" = "lightpink", "Pastoralist" = "lightblue"))
+lefse_stun_spec_plot
+```
+
+## LEfSe - ALL samples
+### All samples - AP vs P
+Genus
+```{r}
+lefse <- run_lefse(physeq,
+                   wilcoxon_cutoff = 0.05,
+                   group = "group",
+                   taxa_rank = "Genus",
+                   kw_cutoff = 0.05,
+                   multigrp_strat = FALSE,
+                   lda_cutoff = 4)
+
+lefse_all_plot <- plot_ef_bar(lefse) +
+    labs(title = "Differential taxa in ALL samples - Genus ",
+       subtitle = "Agro-Pastoralist vs. Pastoralist (LEfSe analysis)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = group_colours)
+lefse_all_plot
+```
+
+Species
+```{r}
+lefse_spec <- run_lefse(physeq,
+                   wilcoxon_cutoff = 0.05,
+                   group = "group",
+                   taxa_rank = "Species",
+                   kw_cutoff = 0.05,
+                   multigrp_strat = FALSE,
+                   lda_cutoff = 4)
+
+lefse_all_plot_spec <- plot_ef_bar(lefse_spec) +
+    labs(title = "Differential taxa in ALL samples",
+       subtitle = "Agro-Pastoralist vs. Pastoralist (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Species") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = group_colours)
+lefse_all_plot_spec
+```
+
+### All samples - stunting status
+Genus
+```{r}
+lefse_stun_gen <- run_lefse(physeq,
+                   wilcoxon_cutoff = 0.05,
+                   group = "stunting",
+                   taxa_rank = "Genus",
+                   kw_cutoff = 0.05,
+                   multigrp_strat = FALSE,
+                   lda_cutoff = 4)
+
+lefse_stun_gen_plot <- plot_ef_bar(lefse_stun_gen)+
+    labs(title = "Differential taxa in ALL samples",
+       subtitle = "Stunted vs. Not Stunted (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = stun_colours)
+lefse_stun_gen_plot
+```
+
+Species
+```{r}
+lefse_spec_all <- run_lefse(physeq,
+                   wilcoxon_cutoff = 0.05,
+                   group = "stunting",
+                   taxa_rank = "Species",
+                   kw_cutoff = 0.05,
+                   multigrp_strat = FALSE,
+                   lda_cutoff = 4)
+
+lefse_spec_all_plot <- plot_ef_bar(lefse_spec_all)+
+    labs(title = "Differential taxa in ALL samples",
+       subtitle = "Stunted vs. Not Stunted (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Species") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = stun_colours)
+lefse_spec_all_plot
+```
+
+## LEfSe - ALL AP samples
+Genus
+```{r}
+AP_lefse <- run_lefse(AP,
+                   wilcoxon_cutoff = 0.05,
+                   group = "stunting",
+                   taxa_rank = "Genus",
+                   kw_cutoff = 0.05,
+                   multigrp_strat = FALSE,
+                   lda_cutoff = 4)
+
+AP_lefse_plot <- plot_ef_bar(AP_lefse) +
+      labs(title = "Differential taxa in Agro-Pastoralist samples - Genus",
+       subtitle = "Stunted vs. Not Stunted (LEfSe analysis)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = stun_colours)
+AP_lefse_plot
+```
+Species
+```{r}
+AP_lefse_spec <- run_lefse(AP,
+                   wilcoxon_cutoff = 0.05,
+                   group = "stunting",
+                   taxa_rank = "Species",
+                   kw_cutoff = 0.05,
+                   multigrp_strat = FALSE,
+                   lda_cutoff = 4)
+
+AP_lefse_spec_plot <- plot_ef_bar(AP_lefse_spec) +
+      labs(title = "Differential taxa in Agro-Pastoralist samples",
+       subtitle = "Stunted vs. Not Stunted (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Species") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 8.5, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = stun_colours)
+AP_lefse_spec_plot
+```
+
+## LEfSe - ALL P samples
+Genus
+```{r}
+stun2_colours <- c("Stunted" = "goldenrod1", "Not Stunted" = "forestgreen")
+
+P_lefse <- run_lefse(P,
+                   wilcoxon_cutoff = 0.05,
+                   group = "stunting",
+                   taxa_rank = "Genus",
+                   kw_cutoff = 0.05,
+                   multigrp_strat = FALSE,
+                   lda_cutoff = 4)
+
+P_lefse_plot <- plot_ef_bar(P_lefse) +
+      labs(title = "Differential taxa in Pastoralist samples - Genus",
+       subtitle = "Stunted vs. Not Stunted (LEfSe analysis)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = stun2_colours)
+P_lefse_plot
+```
+Species
+```{r}
+P_lefse_spec <- run_lefse(P,
+                   wilcoxon_cutoff = 0.05,
+                   group = "stunting",
+                   taxa_rank = "Species",
+                   kw_cutoff = 0.05,
+                   multigrp_strat = FALSE,
+                   lda_cutoff = 4)
+
+P_lefse_spec_plot <- plot_ef_bar(P_lefse_spec) +
+      labs(title = "Differential taxa in Pastoralist samples",
+       subtitle = "Stunted vs. Not Stunted (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Species") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = stun_colours)
+P_lefse_spec_plot
+```
+
+## ANCOMBC
+### using ANCOMBC package
+```{r}
+ancombc_new <- ancombc(physeq,
+                       formula = "hfaz",
+                       p_adj_method = "BH",
+                       prv_cut = 0.1,
+                       tax_level = "Species")
+```
+
+```{r}
+# results
+ancombc_df <- list(
+  feature = rownames(ancombc_new$res$diff_abn),
+  diff_abn = ancombc_new$res$diff_abn$hfaz,
+  lfc = ancombc_new$res$lfc$hfaz,
+  p_val = ancombc_new$res$p_val$hfaz,
+  q_val = ancombc_new$res$q_val$hfaz) %>%
+  as_tibble()
+
+#filter significant
+ancombc_sig_df <- ancombc_df %>%
+  filter(q_val < 0.05 & diff_abn) %>%
+  arrange(desc(abs(lfc)))
+```
+plot
+```{r}
+ggplot(ancombc_sig_df, aes(x = reorder(feature, lfc), y = lfc, fill = lfc > 0)) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  labs(
+    title = "Differential taxa in ALL samples",
+    subtitle = "hfaz (ANCOM-BC)",
+    x = "Taxa",
+    y = "Log Fold Change"
+  ) +
+  theme_linedraw() +
+  theme(
+    plot.title = element_text(face = "bold", size = 12),
+    axis.title = element_text(size = 10, face = "bold"),
+    axis.text = element_text(size = 10, face = "italic"),
+    axis.title.x = element_text(size = 10),
+    plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")
+  ) +
+  scale_fill_manual(values = c("TRUE" = "cornflowerblue", "FALSE" = "salmon"))
+
+```
+
+
+### All samples - AP vs P
+```{r}
+ancom <- run_ancombc(physeq,
+                     group = "group",
+                     p_adjust = "BH") 
+#                     confounders = "wasting_st")
+# nothing significant with BH or with any confounders that I tried - gender, age group and wasting st - or any combo 
+
+# significant taxa
+ancom_df <- as_tibble(marker_table(ancom))
+ancombc_sig <- ancom_df %>%
+  filter(pvalue < 0.05) %>%
+  pull(feature)
+
+ancombc <- plot_ef_bar(ancom) +
+  labs(title = "Differential taxa in ALL samples",
+       subtitle = "Agro-Pastoralist vs Pastoralist (ANCOM-BC)",
+       y = "Taxonomy") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Pastoralist" = "salmon", "Agro.Pastoralist" = "cornflowerblue"))
+ancombc
+```
+#### All samples - Genus
+```{r}
+ancom_gen <- run_ancombc(physeq,
+                     group = "group",
+                     p_adjust = "BH", 
+                     taxa_rank = "Genus")
+ #                    confounders = c("gender", "age_group", "wasting_st"))
+
+# significant taxa
+ancom_gen_df <- as_tibble(marker_table(ancom_gen))
+ancombc_gen_sig <- ancom_gen_df %>%
+  filter(pvalue < 0.05) %>%
+  pull(feature)
+
+ancombc_gen <- plot_ef_bar(ancom_gen) +
+  labs(title = "Differential taxa in ALL samples - Genus",
+       subtitle = "Agro-Pastoralist vs Pastoralist (ANCOMBC analysis)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Pastoralist" = "salmon", "Agro.Pastoralist" = "cornflowerblue"))
+ancombc_gen
+```
+#### All samples - Species
+```{r}
+ancom_spec <- run_ancombc(physeq,
+                     group = "group",
+                     p_adjust = "BH", 
+                     taxa_rank = "Species")
+ #                    confounders = c("gender", "age_group", "wasting_st"))
+
+# significant taxa
+ancom_spec_df <- as_tibble(marker_table(ancom_spec))
+ancombc_spec_sig <- ancom_spec_df %>%
+  filter(pvalue < 0.05) %>%
+  pull(feature)
+
+ancombc_spec <- plot_ef_bar(ancom_spec) +
+  labs(title = "Differential taxa in ALL samples - Species",
+       subtitle = "Agro-Pastoralist vs Pastoralist (ANCOMBC analysis)",
+       y = "Species") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Pastoralist" = "salmon", "Agro.Pastoralist" = "cornflowerblue"))
+ancombc_spec
+```
+
+### All samples - stunting status
+```{r}
+ancom_stun <- run_ancombc(physeq,
+                          group = "stunting",
+                          p_adjust = "none") # or BH (nothing significant), add confounder
+
+# significant taxa
+ancom_stun_df <- as_tibble(marker_table(ancom_stun))
+ancombc_stun_sig <- ancom_stun_df %>%
+  filter(pvalue < 0.05) %>%
+  pull(feature)
+
+ancombc_stun <- plot_ef_bar(ancom_stun) +
+  labs(title = "Differential taxa in ALL samples",
+       subtitle = "Stunted vs Not Stunted (ANCOMBC analysis)",
+       y = "Taxonomy") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 7, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Stunted" = "goldenrod1", "Not.Stunted" = "forestgreen"))
+ancombc_stun
+```
+#### All samples - Genus
+```{r}
+ancom_stun_gen <- run_ancombc(physeq,
+                     group = "stunting",
+                     p_adjust = "none", # or BH (nothing significant), add confounder
+                     taxa_rank = "Genus")
+
+# significant taxa
+ancom_stun_gen_df <- as_tibble(marker_table(ancom_stun_gen))
+ancombc_stun_gen_sig <- ancom_stun_gen_df %>%
+  filter(pvalue < 0.05) %>%
+  pull(feature)
+
+ancombc_stun_gen <- plot_ef_bar(ancom_stun_gen) +
+  labs(title = "Differential taxa in ALL samples - Genus",
+       subtitle = "Stunted vs Not Stunted (ANCOMBC analysis)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Stunted" = "goldenrod1", "Not.Stunted" = "forestgreen"))
+ancombc_stun_gen
+```
+#### All samples - Species
+```{r}
+ancom_stun_spec <- run_ancombc(physeq,
+                     group = "stunting",
+                     p_adjust = "none", # or BH (nothing significant), add confounder
+                     taxa_rank = "Species")
+
+# significant taxa
+ancom_stun_spec_df <- as_tibble(marker_table(ancom_stun_spec))
+ancombc_stun_spec_sig <- ancom_stun_spec_df %>%
+  filter(pvalue < 0.05) %>%
+  pull(feature)
+
+ancombc_stun_spec <- plot_ef_bar(ancom_stun_spec) +
+  labs(title = "Differential taxa in ALL samples",
+       subtitle = "Stunting Status (ANCOM-BC)",
+       y = "Species") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Stunted" = "goldenrod1", "Not.Stunted" = "forestgreen"))
+ancombc_stun_spec
+```
+### ANCOMBC - ALL AP samples
+```{r}
+AP_ancom <- run_ancombc(AP,
+                        group = "stunting",
+                        p_adjust = "none") # or BH (nothing significant), add confounder
+
+# significant taxa
+AP_ancom_df <- as_tibble(marker_table(AP_ancom))
+AP_ancombc_sig <- AP_ancom_df %>%
+  filter(pvalue < 0.05) %>%
+  pull(feature)
+
+AP_ancombc <- plot_ef_bar(AP_ancom) +
+  labs(title = "Differential Taxa In Agro-Pastoralist Samples",
+       subtitle = "Stunted vs Not Stunted (ANCOMBC analysis)",
+       y = "Taxonomy") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Stunted" = "lightgoldenrod2", "Not.Stunted" = "mediumaquamarine"))
+AP_ancombc
+```
+Genus
+```{r}
+AP_ancom_gen <- run_ancombc(AP,
+                        group = "stunting",
+                        p_adjust = "none", # or BH (nothing significant), add confounder
+                        taxa_rank = "Genus")
+
+# significant taxa
+AP_ancom_df_gen <- as_tibble(marker_table(AP_ancom_gen))
+AP_ancombc_sig_gen <- AP_ancom_df_gen %>%
+  filter(pvalue < 0.05) %>%
+  pull(feature)
+
+AP_ancombc_gen <- plot_ef_bar(AP_ancom_gen) +
+  labs(title = "Differential Taxa In Agro-Pastoralist Samples - Genus",
+       subtitle = "Stunted vs Not Stunted (ANCOMBC analysis)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Stunted" = "lightgoldenrod2", "Not.Stunted" = "mediumaquamarine"))
+AP_ancombc_gen
+```
+Species
+```{r}
+AP_ancom_spec <- run_ancombc(AP,
+                        group = "stunting",
+                        p_adjust = "none", # or BH (nothing significant), add confounder
+                        taxa_rank = "Species")
+
+# significant taxa
+AP_ancom_df_spec <- as_tibble(marker_table(AP_ancom_spec))
+AP_ancombc_sig_spec <- AP_ancom_df_spec %>%
+  filter(pvalue < 0.05) %>%
+  pull(feature)
+
+AP_ancombc_spec <- plot_ef_bar(AP_ancom_spec) +
+  labs(title = "Differential Taxa In Agro-Pastoralist Samples",
+       subtitle = "Stunted vs Not Stunted (ANCOM-BC)",
+       y = "Species") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Stunted" = "lightgoldenrod2", "Not.Stunted" = "mediumaquamarine"))
+AP_ancombc_spec
+```
+
+### ANCOMBC - ALL P samples
+```{r}
+P_ancom <- run_ancombc(P,
+                        group = "stunting",
+                        p_adjust = "none") # or BH (nothing significant), add confounder
+
+# significant taxa
+P_ancom_df <- as_tibble(marker_table(P_ancom))
+P_ancombc_sig <- P_ancom_df %>%
+  filter(pvalue < 0.1) %>%
+  pull(feature)
+
+P_ancombc <- plot_ef_bar(P_ancom) +
+  labs(title = "Differential Taxa In Pastoralist Samples",
+       subtitle = "Stunted vs Not Stunted (ANCOMBC analysis)",
+       y = "Taxonomy") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Stunted" = "goldenrod1", "Not.Stunted" = "forestgreen"))
+
+P_ancombc
+```
+Genus
+```{r}
+P_ancom_gen <- run_ancombc(P,
+                        group = "stunting",
+                        p_adjust = "none", # or BH (nothing significant), add confounder
+                        taxa_rank = "Genus")
+
+# significant taxa
+P_ancom_df_gen <- as_tibble(marker_table(P_ancom_gen))
+P_ancombc_sig_gen <- P_ancom_df_gen %>%
+  filter(pvalue < 0.1) %>%
+  pull(feature)
+
+P_ancombc_gen <- plot_ef_bar(P_ancom_gen) +
+  labs(title = "Differential Taxa In Agro-Pastoralist Samples - Genus",
+       subtitle = "Stunted vs Not Stunted (ANCOMBC analysis)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Stunted" = "goldenrod1", "Not.Stunted" = "forestgreen"))
+P_ancombc_gen
+```
+Species
+```{r}
+P_ancom_spec <- run_ancombc(P,
+                        group = "stunting",
+                        p_adjust = "none", # or BH (nothing significant), add confounder
+                        taxa_rank = "Species")
+
+# significant taxa
+P_ancom_df_spec <- as_tibble(marker_table(P_ancom_spec))
+P_ancombc_sig_spec <- P_ancom_df_spec %>%
+  filter(pvalue < 0.1) %>%
+  pull(feature)
+
+P_ancombc_spec <- plot_ef_bar(P_ancom_spec) +
+  labs(title = "Differential Taxa In Pastoralist Samples",
+       subtitle = "Stunted vs Not Stunted (ANCOM-BC)",
+       y = "Species") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "grey")) +
+  scale_fill_manual(values = c("Stunted" = "goldenrod1", "Not.Stunted" = "forestgreen"))
+P_ancombc_spec
+```
+
+
+
+
+
+
+
+
+
+
