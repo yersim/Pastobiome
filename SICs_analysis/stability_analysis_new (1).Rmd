@@ -1,0 +1,2498 @@
+---
+title: "stability_analysis"
+author: "Jazmine Mote"
+date: "2025-05-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+set wd, load libraries
+```{r}
+setwd("/Volumes/RECHERCHE/FAC/FBM/DMF/pvonaesc/default/D2c/Jazmine Mote/SICs/16S Results")
+
+library(tidyverse)
+library(phyloseq)
+library(readxl)
+library(randomcoloR)
+library(ggtext)
+library(ggsignif)
+library(microbiome)
+library(ape)
+```
+
+# STABILITY TESTS
+in the end there will be the following:
+
+*physeq* - SICs only, not filtered (only bacteria & archaea, makes sense as it's from SICs)
+
+*physeq_poop* - original faecal samples, not filtered yet
+*physeq_pcoa* - original faecal samples, not filtered yet but AP & P labelled with (faecal sample)
+  - so we can differentiate between faecal samples & SICs later on
+
+*physeq_all* - physeq + physeq_poop
+
+*physeq_all_pcoa* - physeq + physeq_pcoa
+
+--
+
+*physeq_all_filtered* - physeq_all with Eukaryota & Unassigned removed
+*physeq_all_filtered_pcoa* - physeq_all_pcoa with Eukaryota & Unassigned removed
+
+physeq didn't need filtering, can be used as is
+
+*physeq_poop_filtered* - physeq_poop with Eukaryota & Unassigned removed
+
+-- then relative abundances --
+
+*physeq_rel* - physeq_all_filtered - relative abundance
+
+*physeq_rel_pcoa* - physeq_all_filtered_pcoa - relative abundance
+
+*physeq_sic_rel* - physeq - relative abundance (because it didn't need filtering)
+
+*physeq_poop_rel* - physeq_poop_filtered - relative abundance
+
+-- AP vs P --
+
+*physeq_AP* - physeq_all_filtered - AP samples, relative abundance
+*physeq_AP_sep* - physeq_all_filtered_pcoa - AP samples, relative abundance
+
+*physeq_P* - physeq_all_filtered - P samples, relative abundance
+*physeq_P_sep* - physeq_all_filtered_pcoa - P samples, relative abundance
+
+(the same can be done to *physeq* and *physeq_poop* if they need to be separated)
+
+--
+
+Phyloseq dataframe creation
+# SIC samples
+Taxonomy table and OTU table come from the DADA2 pipeline template
+## 1. Taxonomy table
+```{r}
+## 1. Taxonomy table
+# tax contain the assigned taxonomy table
+# .txt file contain sequences and corresponding assigned species
+# Rank1: Kingdom, 2: Phylum, 3: Class, 4: Order, 5: Family, 6: Genus, 7:Species
+
+tax = read.delim("../16S Results/DADA2/STABILITY/new results/taxonomy_table_PASTOBIOME_STABILITY_NEW.txt", header = TRUE, sep = "\t") # change this to your taxonomy table
+# Check for duplicate in ASV names
+which(duplicated(row.names(tax))==TRUE)
+
+# make ASVs as column
+#tax <- rownames_to_column(tax, var = "ASV")
+
+#tax$ASV2 <- tax$ASV # make a copy of ASV to set as rownames
+#tax <- column_to_rownames(tax, var = "ASV2")
+
+# assign "NAs" to higher taxonomy 
+tax <- tax %>%
+  mutate(Family  = ifelse(is.na(Family), str_c(Order, "_Unassigned"), Family),
+    Genus   = ifelse(is.na(Genus), str_c(Family, "_Unassigned"), Genus),
+    Species = ifelse(is.na(Species), str_c(Genus, "_unassigned"), Species))
+
+tax <- tax %>%
+  mutate(Species = ifelse(str_detect(Species, "_"),
+                          Species,                              # Keep as is if underscore is present
+                          str_c(Genus, " ", Species)))          # Otherwise, prepend Genus + space
+tax <- as.matrix(tax)
+
+# Create taxonomy formal class taxonomy table for the phyloseq
+taxonomy <- tax_table(tax)
+``` 
+
+
+## 2. ASV table
+
+My samples:
+AP022C1	P057C1
+AP013C1	P020C1
+AP018C2	P032C3
+AP017C2	P102C2
+AP049C1	P052C1
+AP066C2	P111C1
+AP052C1	P056C1
+AP041C1	P103C1
+AP120C1	P073C2
+AP125C1	P017C1
+AP055C1	P044C2
+AP111C1	P075C1
+```{r}
+# Importing merged sequence table, contains ASV count per samples 
+otu <- read.delim("../16S Results/DADA2/STABILITY/new results/abundance_table_PASTOBIOME_STABILITY_NEW.txt", header = TRUE, sep = "\t")  # change this to your sequence table
+otu <- as.data.frame(otu)
+
+mysamples <- c("AP022C1", "AP013C1", "AP018C2", "AP017C2", "AP049C1", "AP066C2",
+               "AP052C1", "AP041C1", "AP120C1", "AP125C1", "AP055C1", "AP111C1", 
+               "P057C1", "P020C1", "P032C3", "P102C2", "P052C1", "P111C1", 
+               "P056C1", "P103C1", "P073C2", "P017C1", "P044C2", "P075C1")
+
+SICs <- c("AP022C1_1", "AP022C1_2", "AP022C1_3", #1
+          "AP013C1_1", "AP013C1_2", "AP013C1_3", #2
+          "AP018C2_1", "AP018C2_2", "AP018C2_3", #3
+          "AP017C2_1", "AP017C2_2", "AP017C2_3", #4
+          "AP049C1_1", "AP049C1_2", "AP049C1_3", #5
+          "AP066C2_1", "AP066C2_2", "AP066C2_3", #6
+          "AP052C1_1", "AP052C1_2", "AP052C1_3", #7
+          "AP041C1_1", "AP041C1_2", "AP041C1_3", #8
+          "AP120C1_1", "AP120C1_2", "AP120C1_3", #9
+          "AP125C1_1", "AP125C1_2", "AP125C1_3", #10
+          "AP055C1_1", "AP055C1_2", "AP055C1_3", #11
+          "AP111C1_1", "AP111C1_2", "AP111C1_3", #12
+          "P057C1_1", "P057C1_2", #13
+          "P020C1_1", "P020C1_2", "P020C1_3", #14
+          "P032C3_1", "P032C3_2", "P032C3_3", #15
+          "P102C2_1", "P102C2_2", "P102C2_3", #16
+          "P052C1_1", "P052C1_2", "P052C1_3", #17
+          "P111C1_1", "P111C1_2", "P111C1_3", #18
+          "P056C1_1", "P056C1_2", "P056C1_3", #19
+          "P103C1_1", "P103C1_2", "P103C1_3", #20
+          "P073C2_1", "P073C2_2", #21 - WILL NEED TO ADD S213 WHEN I FIGURE IT OUT
+          "P017C1_1", "P017C1_2", "P017C1_3",  #22
+          "P044C2_1", "P044C2_2", "P044C2_3", #23
+          "P075C1_1", "P075C1_2", "P075C1_3") #24
+
+stun_colours <- c("Stunted" = "firebrick", "Not Stunted" = "midnightblue")
+  
+group_colours <- c("Pastoralist" = "salmon", "Agro-Pastoralist" = "cornflowerblue")
+
+# put OTU in the right order
+otu <- otu %>%
+  select(S11, S12, S13, S21, S22, S23, S31, S32, S33, S41, S42, S43,
+         S51, S52, S53, S61, S62, S63, S71, S72, S73, S81, S82, S83,
+         S91, S92, S93, S101, S102, S103, S111, S112, S113, S121, S122, S123,
+         S131, S132, S141, S142, S143, S151, S152, S153, S161, S162, S163,
+         S171, S172, S173, S181, S182, S183, S191, S192, S193, S201, S202, S203,
+         S211, S212, S221, S222, S223, S231, S232, S233, S241, S242, S243)
+
+#### rename columns to match SampleID again 
+colnames(otu) <- c("AP022C1_1", "AP022C1_2", "AP022C1_3", #1
+                   "AP013C1_1", "AP013C1_2", "AP013C1_3", #2
+                   "AP018C2_1", "AP018C2_2", "AP018C2_3", #3
+                   "AP017C2_1", "AP017C2_2", "AP017C2_3", #4
+                   "AP049C1_1", "AP049C1_2", "AP049C1_3", #5
+                   "AP066C2_1", "AP066C2_2", "AP066C2_3", #6
+                   "AP052C1_1", "AP052C1_2", "AP052C1_3", #7
+                   "AP041C1_1", "AP041C1_2", "AP041C1_3", #8
+                   "AP120C1_1", "AP120C1_2", "AP120C1_3", #9
+                   "AP125C1_1", "AP125C1_2", "AP125C1_3", #10
+                   "AP055C1_1", "AP055C1_2", "AP055C1_3", #11
+                   "AP111C1_1", "AP111C1_2", "AP111C1_3", #12
+                   "P057C1_1", "P057C1_2", #13
+                   "P020C1_1", "P020C1_2", "P020C1_3", #14
+                   "P032C3_1", "P032C3_2", "P032C3_3", #15
+                   "P102C2_1", "P102C2_2", "P102C2_3", #16
+                   "P052C1_1", "P052C1_2", "P052C1_3", #17
+                   "P111C1_1", "P111C1_2", "P111C1_3", #18
+                   "P056C1_1", "P056C1_2", "P056C1_3", #19
+                   "P103C1_1", "P103C1_2", "P103C1_3", #20
+                   "P073C2_1", "P073C2_2", #21 - WILL NEED TO ADD S213 WHEN I FIGURE IT OUT
+                   "P017C1_1", "P017C1_2", "P017C1_3",  #22
+                   "P044C2_1", "P044C2_2", "P044C2_3", #23
+                   "P075C1_1", "P075C1_2", "P075C1_3") #24
+```
+
+
+```{r}
+# Transposition of OTU to matrix class and numerical values
+otu <- as.matrix(otu)
+class(otu) <- "numeric"
+
+#Create taxa formal class otu_table based on otu matrix
+taxa = otu_table(otu, taxa_are_rows = TRUE)
+```
+
+
+## 3. Metadata
+```{r}
+# Load your metadata file 
+# Excel file (select excel sheet if several)
+md <- as.data.frame(read_excel("../16S Results/Pastobiome_metadata_final.xlsx", sheet = "Sheet1")) # change this to your metadata table
+
+# filter to only have the 24 samples
+md <- md %>% 
+  filter(SampleID %in% mysamples)  # Replace 'SampleID' with the actual column name in md
+
+# Remove unwanted columns
+md <- md %>%
+  select(SampleID, group, age_months, stunting, hfaz, wasting_st, wfaz, wfhz, birth_type) # if wanted
+
+# change "stunting" and "wasting" to "stunted/not stunted" & "wasted/not wasted"
+md <- md %>%
+  mutate(stunting = ifelse(stunting == "No", "Not Stunted", 
+                           ifelse(stunting == "Yes", "Stunted", stunting)))
+md <- md %>%
+  mutate(wasting_st = ifelse(wasting_st == "No", "Not Wasted", 
+                           ifelse(wasting_st == "Yes", "Wasted", wasting_st)))
+
+# match it with the OTU tables
+md_expanded <- md %>%
+  uncount(3) %>%  # Duplicates each row twice (3 in total)
+  group_by(SampleID) %>%
+  mutate(SampleID = paste0(SampleID, "_", row_number())) %>%
+  ungroup()
+
+md_expanded <- md_expanded %>%
+  filter(!SampleID %in% c("P057C1_3", "P073C2_3")) # take off S133 and S213
+
+md_expanded$SampleID_copy <- md_expanded$SampleID
+md_expanded <- md_expanded %>%
+  column_to_rownames(var = "SampleID_copy")
+
+identical(rownames(md_expanded), colnames(otu)) # needs to be true
+
+# compare names
+setdiff(colnames(otu), rownames(md_expanded)) # which columns are in otu but not in md_expanded
+setdiff(rownames(md_expanded), colnames(otu)) # which rows in md_expanded but not in otu
+
+md_expanded <- md_expanded[order(rownames(md_expanded)), ]
+otu <- otu[, order(colnames(otu))]
+
+identical(rownames(md_expanded), colnames(otu)) # needs to be true
+
+# Assign row names as fastq ID (which should match the sample names/fatsq names in your OTU table)
+md_expanded$fastqID <- row.names(md_expanded)
+
+md_expanded <- as.data.frame(md_expanded)
+md_expanded <- md_expanded %>%
+  select(-SampleID)
+
+# Creating a sample data class for phyloseq
+metadata <- sample_data(as.data.frame(md_expanded))
+md_expanded[] <- lapply(md_expanded, function(x) if(is.factor(x)) as.character(x) else x)
+```
+
+
+##Phyloseq creation
+```{r}
+# Phyloseq object creation from the sequence and taxonomy tables
+physeq= phyloseq(taxa, taxonomy)
+
+# Visualization
+physeq #here you get the number of taxa and samples
+# 1079 taxa, 70 samples
+
+### Metadata phyloseq object
+#Addition of metadata in the phyloseq object
+physeq = merge_phyloseq(metadata, physeq) #why here and not before?
+physeq # sanity check - all good
+```
+# faecal samples
+## 1. Taxonomy table
+```{r}
+tax_poop = read.delim("../16S Results/DADA2/ORIGINAL/new results/taxonomy_table_PASTOBIOME_ORIGINAL_NEW.txt", header = TRUE, sep = "\t") # change this to your taxonomy table
+
+# Check for duplicate in ASV names
+which(duplicated(row.names(tax_poop))==TRUE)
+
+# change every NA to Unassigned
+tax_poop[is.na(tax_poop)] <- "Unassigned"
+# Create taxonomy formal class taxonomy table for the phyloseq
+taxonomy_poop <- tax_table(as.matrix(tax_poop))
+colnames(tax_table(taxonomy_poop)) <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+``` 
+## 2. ASV table
+
+My samples:
+AP022C1	P057C1
+AP013C1	P020C1
+AP018C2	P032C3
+AP017C2	P102C2
+AP049C1	P052C1
+AP066C2	P111C1
+AP052C1	P056C1
+AP041C1	P103C1
+AP120C1	P073C2
+AP125C1	P017C1
+AP055C1	P044C2
+AP111C1	P075C1
+```{r}
+# Importing merged sequence table, contains ASV count per samples 
+otu_poop <- read.delim("../16S Results/DADA2/ORIGINAL/new results/abundance_table_PASTOBIOME_ORIGINAL_NEW.txt", header = TRUE, sep = "\t")  # change this to your sequence table
+otu_poop <- as.data.frame(otu_poop)
+
+# Class matrix and numerical values
+otu_poop<-as.matrix(otu_poop)
+class(otu_poop) <- "numeric"
+
+#Create taxa formal class otu_table based on otu matrix
+taxa_poop = otu_table(otu_poop, taxa_are_rows = TRUE)
+```
+
+
+## 3. Metadata
+```{r}
+# md is the original clean metadata, will make a new one that we can use to differentiate between faecal sample and SIC
+md_poop <- md %>%
+  mutate(group = ifelse(group == "Agro-Pastoralist", "Agro-Pastoralist (faecal sample)", 
+                          ifelse(group == "Pastoralist", "Pastoralist (faecal sample)", group)))
+md_poop <- md_poop %>%
+  mutate(stunting = ifelse(stunting == "Stunted", "Stunted (faecal sample)", 
+                          ifelse(stunting == "Not Stunted", "Not Stunted (faecal sample)", stunting)))
+# use md_poop for pcoa plots
+
+md_poop$SampleID_copy <- md_poop$SampleID
+md_poop <- md_poop %>%
+  column_to_rownames(var = "SampleID_copy")
+md$SampleID_copy <- md$SampleID
+md <- md %>%
+  column_to_rownames(var = "SampleID_copy")
+
+
+identical(rownames(md_poop), colnames(otu_poop)) # needs to be true
+identical(rownames(md), colnames(otu_poop)) # needs to be true
+
+# compare names
+setdiff(colnames(otu_poop), rownames(md_poop)) # which columns are in otu_t but not in md_poop
+setdiff(rownames(md_poop), colnames(otu_poop)) # which rows in md_poop but not in otu_t
+
+# compare names
+setdiff(colnames(otu_poop), rownames(md)) # which columns are in otu_t but not in md
+setdiff(rownames(md), colnames(otu_poop)) # which rows in mdbut not in otu_t
+
+md_poop <- md_poop[order(rownames(md_poop)), ]
+otu_poop <- otu_poop[, order(colnames(otu_poop))]
+
+md<- md[order(rownames(md)), ]
+
+identical(rownames(md_poop), colnames(otu_poop)) # needs to be true
+# which names are not identical?
+#which(rownames(md_expanded) != colnames(otu_t))
+identical(rownames(md), colnames(otu_poop)) # needs to be true
+
+# Assign row names as fastq ID (which should match the sample names/fatsq names in your OTU table)
+md_poop$fastqID <- row.names(md_poop)
+
+md_poop <- as.data.frame(md_poop)
+md_poop <- md_poop %>%
+  select(-SampleID)
+
+# Creating a sample data class for phyloseq
+metadata_pcoa <- sample_data(as.data.frame(md_poop))
+md_poop[] <- lapply(md_poop, function(x) if(is.factor(x)) as.character(x) else x)
+
+# Creating a sample data class for phyloseq
+
+metadata_poop <- sample_data(as.data.frame(md))
+md[] <- lapply(md, function(x) if(is.factor(x)) as.character(x) else x)
+```
+
+# Phyloseq creation
+```{r}
+rownames(taxa_poop) <- rownames(taxonomy_poop)
+
+# Phyloseq object creation from the sequence and taxonomy tables
+physeq_poop = phyloseq(taxa_poop, taxonomy_poop)
+
+# Visualization
+physeq_poop #here you get the number of taxa and samples
+# 1188 taxa and 24 samples
+
+### Metadata phyloseq object
+#Addition of metadata in the phyloseq object
+physeq_pcoa = merge_phyloseq(metadata_pcoa, physeq_poop)
+physeq_pcoa # sanity check
+
+# for PCoA plots
+physeq_poop = merge_phyloseq(metadata_poop, physeq_poop)
+physeq_poop # sanity check
+```
+# merge phyloseqs
+```{r}
+physeq_all <- merge_phyloseq(physeq, physeq_poop)
+
+physeq_all_pcoa <- merge_phyloseq(physeq, physeq_pcoa)
+```
+
+## first analysis
+```{r}
+# colours
+ap_p_colours <- c("AP (SIC)" = "palegreen3", 
+                  "P (SIC)" = "skyblue2", 
+                  "AP (Faeces)" = "palegreen4", 
+                  "P (Faeces)" = "skyblue4")
+
+# Plot richness per country of un-trimmed data
+#pdf(file ="RichnessOfUntrimmedData.pdf", width = 30, height = 8)
+richness_group <- plot_richness(physeq_all_pcoa, x = "group",
+                                measures = c("Observed", "Chao1", "Shannon", "InvSimpson"),
+                                color = "group") + 
+  geom_boxplot(aes(x = group, y = value, fill = group, colour = group), alpha = 0.8) +
+  theme_linedraw() + 
+  theme(axis.text.x.bottom = element_blank(),
+        plot.title = element_text(face = "bold.italic"),
+        plot.subtitle = element_text(colour = "Red")) +
+  xlab("Community") +
+  ggtitle("Richness per community of untrimmed data (Stability SICs & Faecal Samples)") +
+  scale_fill_manual(values = ap_p_colours) +
+  scale_colour_manual(values = ap_p_colours) +
+  labs(fill = "Community", color = "Community") +
+  geom_signif(comparisons = list(c("Agro-Pastoralist", "Agro-Pastoralist (faecal sample)"),
+                                   c("Pastoralist", "Pastoralist (faecal sample)")),
+              test = "wilcox.test",  # wilcoxon test
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = c(0.2, 0.5),
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5,
+              colour = "black",
+              textcolour = "black") 
+
+
+richness_group
+#dev.off()
+```
+
+
+```{r}
+# Abundance bar plots
+abun_bar <- plot_bar(
+  prune_taxa(names(sort(taxa_sums(physeq_all_pcoa), TRUE)[1:20]), physeq_all_pcoa), 
+  x = "group", facet_grid = ~Family, fill = "group") +
+  theme_linedraw() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8, face = "italic"),
+    legend.position = "right",
+    plot.title = element_text(face = "bold.italic"),
+    strip.text = element_text(face = "italic"),
+    axis.text.x.bottom = element_blank()) +
+  xlab("Community") +
+  ggtitle("Abundance of top Families") +
+  scale_fill_manual(values = ap_p_colours) +
+  scale_colour_manual(values = ap_p_colours) +  
+  geom_bar(stat = "identity", position = "stack", alpha = 0.4, color = NA) +
+  labs(fill = "Community", color = "Community")
+# Abundance need to be changed based on number of samples
+abun_bar
+```
+
+# Filtering
+```{r}
+# Filter the dataset to keep only relevant data
+get_taxa_unique(physeq_all, "Kingdom")  ## Bacteria, Archaea,  and Eukaryota
+physeq_all # 2267 taxa and 94 samples
+# filter out Chloroplast, Mitochondria and Eukaryota and others
+physeq_all_filtered <- physeq_all %>%
+  subset_taxa(Family != "Mitochondria") %>%
+  subset_taxa(Order != "Chloroplast") %>%
+  subset_taxa(Kingdom != "Eukaryota") %>%
+  subset_taxa(!is.na(Family) & !is.na(Genus))
+physeq_all_filtered # 2262 taxa and 94 samples
+```
+
+for pcoa
+```{r}
+# Filter the dataset to keep only relevant data
+get_taxa_unique(physeq_all_pcoa, "Kingdom")  ## Bacteria, Archaea,and Eukaryota
+physeq_all_pcoa # 2267 taxa and 94 samples
+# filter out Chloroplast, Mitochondria and Eukaryota and others
+physeq_all_filtered_pcoa <- physeq_all_pcoa %>%
+  subset_taxa(Family != "Mitochondria") %>%
+  subset_taxa(Order != "Chloroplast") %>%
+  subset_taxa(Kingdom != "Eukaryota") %>%
+  subset_taxa(!is.na(Family) & !is.na(Genus))
+physeq_all_filtered_pcoa  # 2262 taxa and 94 samples
+```
+
+```{r}
+# Filter the dataset to keep only relevant data
+get_taxa_unique(physeq, "Kingdom")  ## Bacteria, Archaea
+physeq # 1079 taxa and 70 samples
+
+
+# no need to filter - makes sense as these are SICs
+```
+
+```{r}
+# Filter the dataset to keep only relevant data
+get_taxa_unique(physeq_poop, "Kingdom")  ## Bacteria, Archaea,  and Eukaryota
+physeq_poop # 1188 taxa and 24 samples
+# filter out Chloroplast, Mitochondria and Eukaryota and others
+physeq_poop_filtered <- physeq_poop %>%
+  subset_taxa(Family != "Mitochondria") %>%
+  subset_taxa(Order != "Chloroplast") %>%
+  subset_taxa(Kingdom != "Eukaryota") %>%
+  subset_taxa(!is.na(Family) & !is.na(Genus))
+physeq_poop_filtered # 1183 taxa and 24 samples
+```
+
+# relative abundances
+Calculate
+```{r}
+physeq_rel <- transform_sample_counts(physeq_all_filtered, function(x) x / sum(x))
+
+physeq_rel_pcoa <- transform_sample_counts(physeq_all_filtered_pcoa, function(x) x / sum(x))
+
+physeq_sic_rel <- transform_sample_counts(physeq, function(x) x / sum(x))
+
+physeq_poop_rel <- transform_sample_counts(physeq_poop_filtered, function(x) x / sum(x))
+```
+
+# subset the phyloseq
+unless I need faecal sample and SIC differentiated I only need physeq_all_filtered
+
+For example, several groups (countries, controls, etc)
+Can be usefull if the relative abundance need to be computed separatly by groups
+AP
+```{r}
+# Subset based on metadata info such as a groups (samples separated in group 1 and 2 for example)
+# physeq 1
+physeq_AP <- subset_samples(physeq_all_filtered, group =="Agro-Pastoralist")
+physeq_AP # 2262 taxa, 48 samples
+# Removing taxa with abundance 0
+physeq_AP <- prune_taxa(taxa_sums(physeq_AP)> 0, physeq_AP)
+# Relative abundance
+physeq_AP <- transform_sample_counts(physeq_AP, function(x) x / sum(x))
+physeq_AP # 1272 taxa, 48 samples
+```
+P
+```{r}
+# physeq 1
+physeq_P <- subset_samples(physeq_all_filtered, group =="Pastoralist")
+physeq_P # 2262 taxa, 46 samples
+# Removing taxa with abundance 0
+physeq_P <- prune_taxa(taxa_sums(physeq_P)> 0, physeq_P)
+# Relative abundance
+physeq_P <- transform_sample_counts(physeq_P, function(x) x / sum(x))
+physeq_P # 1487 taxa, 46 samples
+```
+
+AP
+```{r}
+# Subset based on metadata info such as a groups (samples separated in group 1 and 2 for example)
+# physeq 1
+physeq_AP_sep <- subset_samples(physeq_all_filtered_pcoa, group =="Agro-Pastoralist")
+physeq_AP_sep # 2262 taxa, 48 samples
+# Removing taxa with abundance 0
+physeq_AP_sep <- prune_taxa(taxa_sums(physeq_AP_sep)> 0, physeq_AP_sep)
+# Relative abundance
+physeq_AP_sep <- transform_sample_counts(physeq_AP_sep, function(x) x / sum(x))
+physeq_AP_sep # 601 taxa, 48 samples
+```
+P
+```{r}
+# physeq 1
+physeq_P_sep <- subset_samples(physeq_all_filtered_pcoa, group =="Pastoralist")
+physeq_P_sep # 2262 taxa, 46 samples
+# Removing taxa with abundance 0
+physeq_P_sep <- prune_taxa(taxa_sums(physeq_P_sep)> 0, physeq_P_sep)
+# Relative abundance
+physeq_P_sep <- transform_sample_counts(physeq_P_sep, function(x) x / sum(x))
+physeq_P_sep # 612 taxa, 46 samples
+```
+# family level
+```{r}
+# FAMILY colurs
+all_families <- unique(tax_table(physeq_all_filtered)[, "Family"])
+
+# generate colours for every family
+num_families <- length(all_families)
+
+family_colours <- setNames(distinctColorPalette(num_families), all_families)
+#family_colours <- colorRampPalette(brewer.pal(9, "Set3"))(num_families)
+
+length(family_colours) #129
+```
+
+```{r}
+# AP
+# top 20 families
+family_abundance_AP <- psmelt(physeq_AP) %>%
+  group_by(Family) %>%
+  summarize(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+top20_family <- family_abundance_AP$Family
+
+fam_legend <- scale_fill_manual(values = family_colours,
+                                     breaks = top20_family)
+
+#agglomerate to family level
+physeq_AP_fam <- tax_glom(physeq_AP, taxrank = "Family")
+
+# Scale fill manula can be remove if we want to default colors
+# pdf("BarPlot_RelativeAbundance_AP.pdf", width = 10) # add when ready to save
+AP_fam_bar <- plot_bar(physeq_AP_fam, fill = "Family") +
+  fam_legend +
+  theme_linedraw() + 
+    theme(axis.text.x = element_markdown(angle = 45, hjust = 1, size = 8), 
+    legend.position = "right",         
+    legend.direction = "vertical",     
+    legend.text = element_text(size = 10, face = "italic"), 
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.key.size = unit(1.5, "lines"),
+    plot.title = element_text(size = 15, face = "bold")) +
+  ggtitle("Relative abundance in Agro-Pastoralist samples: Family") +
+  ylab("Relative abundance") +
+  guides(fill = guide_legend(ncol = 1, title = "Top 20 Families")) + 
+  facet_wrap(~stunting, scales = "free_x") +
+  scale_x_discrete(labels = function(x) {ifelse(x %in% mysamples,
+           paste0("**", x, "**"), x)}) +
+  geom_bar(stat = "identity", position = "stack", color = NA)
+#dev.off()
+AP_fam_bar
+```
+
+```{r}
+# P
+# top 20 families
+family_abundance_P <- psmelt(physeq_P) %>%
+  group_by(Family) %>%
+  summarize(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+top20_family_P <- family_abundance_P$Family
+
+fam_legend_P <- scale_fill_manual(values = family_colours,
+                                     breaks = top20_family_P)
+
+#agglomerate to family level
+physeq_P_fam <- tax_glom(physeq_P, taxrank = "Family")
+
+# Scale fill manula can be remove if we want to default colors
+# pdf("BarPlot_RelativeAbundance_AP.pdf", width = 10) # add when ready to save
+P_fam_bar <- plot_bar(physeq_P_fam, fill = "Family") +
+  fam_legend_P +
+#  scale_fill_manual(values = family_colours) +
+  theme_linedraw() + 
+    theme(axis.text.x = element_markdown(angle = 45, hjust = 1, size = 8), 
+    legend.position = "right",         
+    legend.direction = "vertical",     
+    legend.text = element_text(size = 10, face = "italic"), 
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.key.size = unit(1.5, "lines"),
+    plot.title = element_text(size = 15, face = "bold")) +
+  ggtitle("Relative abundance in Pastoralist samples: Family") +
+  ylab("Relative abundance") +
+  guides(fill = guide_legend(ncol = 1, title = "Top 20 Families")) +
+  facet_wrap(~stunting, scales = "free_x") +
+  scale_x_discrete(labels = function(x) {ifelse(x %in% mysamples,
+           paste0("**", x, "**"), x)}) +
+  geom_bar(stat = "identity", position = "stack", color = NA) +
+  geom_col(colour = NA)
+#dev.off()
+P_fam_bar
+```
+
+## faecal vs replicate wilcoxon test
+```{r}
+compare_faecal_to_SIC_replicates <- function(physeq_rel, tax_rank = NULL) {
+  # abundance table
+  abund <- otu_table(physeq_rel)
+  if (!taxa_are_rows(physeq_rel)) {
+    abund <- t(abund)
+  }
+  df <- as.data.frame(abund)
+  df$taxon <- rownames(df)
+  long_df <- pivot_longer(df, -taxon, names_to = "SampleID", values_to = "Abundance")
+  
+  # sample groups
+  long_df <- long_df %>%
+    mutate(
+      sampleID = gsub("(_[1-3])$", "", SampleID),
+      group = ifelse(grepl("_[1-3]$", SampleID), "SIC", "Faecal")
+    )
+  
+  # Wilcoxon test: faec vs SIC sampleID
+  results <- long_df %>%
+    group_by(sampleID, taxon) %>%
+    filter(length(unique(group)) == 2) %>%
+    summarise(
+      p_value = tryCatch({
+        wilcox.test(Abundance[group == "Faecal"], Abundance[group == "SIC"])$p.value
+      }, error = function(e) NA),
+      mean_faecal = mean(Abundance[group == "Faecal"]),
+      mean_SIC = mean(Abundance[group == "SIC"]),
+      direction = case_when(
+        mean_faecal > mean_SIC ~ "Increased in Faeces",
+        mean_faecal < mean_SIC ~ "Increased in SIC",
+        TRUE ~ "No Change"
+      ),
+      .groups = "drop"
+    ) %>%
+    mutate(p_adj = p.adjust(p_value, method = "BH"))
+  
+  # add taxonomy
+  tax_df <- as.data.frame(tax_table(physeq_rel))
+  tax_df$taxon <- rownames(tax_df)
+
+  if (!is.null(tax_rank) && tax_rank %in% colnames(tax_df)) {
+  tax_df <- tax_df %>%
+    select(taxon, !!sym(tax_rank)) %>%
+    rename(TaxonName = !!sym(tax_rank))
+  results <- left_join(results, tax_df, by = "taxon")
+} else {
+  results$TaxonName <- results$taxon
+}
+  
+  return(results)
+}
+```
+
+```{r}
+faecal_vs_SIC <- compare_faecal_to_SIC_replicates(physeq_rel, tax_rank = "Family")
+faecal_vs_SIC %>% filter(p_adj < 0.05) # nothing significantly different 
+
+# find out which are increased in SIC and i
+faecal_vs_SIC_filt <- faecal_vs_SIC %>%
+#  filter(p_adj < 0.05) %>%
+  select(sampleID, direction, p_adj, TaxonName) %>%
+  filter(direction != "No Change") %>%
+  group_by(sampleID, direction, TaxonName)
+```
+
+
+## comparing replicates
+```{r}
+compare_SIC_replicates <- function(physeq_sic_rel, tax_rank = NULL) {
+  # Extract abundance table
+  abund <- otu_table(physeq_sic_rel)
+  if (!taxa_are_rows(physeq_sic_rel)) {
+    abund <- t(abund)
+  }
+  df <- as.data.frame(abund)
+  df$taxon <- rownames(df)
+  long_df <- pivot_longer(df, -taxon, names_to = "SampleID", values_to = "Abundance")
+
+  # Extract BaseSample and Replicate
+  long_df <- long_df %>%
+    mutate(
+      BaseSample = gsub("(_[1-3])$", "", SampleID),
+      Replicate = sub(".*(_[1-3])$", "\\1", SampleID)
+    )
+
+  # Kruskal-Wallis test per BaseSample and taxon
+  results_replicate <- long_df %>%
+    group_by(BaseSample, taxon) %>%
+    filter(n_distinct(Replicate) >= 2) %>%
+    summarise(
+      p_value = tryCatch({
+        kruskal.test(Abundance ~ Replicate)$p.value
+      }, error = function(e) NA),
+      sd = sd(Abundance),
+      range = max(Abundance) - min(Abundance),
+      .groups = "drop"
+    ) %>%
+    mutate(p_adj = p.adjust(p_value, method = "BH"))
+
+  # Add taxonomy
+  tax_df <- as.data.frame(tax_table(physeq_sic_rel))
+  tax_df$taxon <- rownames(tax_df)
+  results_replicate <- left_join(results_replicate, tax_df, by = "taxon")
+
+  if (!is.null(tax_rank)) {
+    results_replicate <- results_replicate %>% rename(TaxonName = !!sym(tax_rank))
+  }
+
+  return(results_replicate)
+}
+
+```
+
+```{r}
+# Assuming physeq_sic_rel contains only SIC replicates
+replicate_variability <- compare_SIC_replicates(physeq_sic_rel, tax_rank = "Family")
+replicate_variability %>% filter(p_adj < 0.05)
+```
+
+
+
+# genus level
+```{r}
+# FAMILY colurs
+all_genera <- unique(tax_table(physeq_all_filtered)[, "Genus"])
+
+# generate colours for every genus
+num_genera <- length(all_genera)
+
+genus_colours <- setNames(distinctColorPalette(num_genera), all_genera)
+
+length(genus_colours) #353
+```
+
+```{r}
+# AP
+# top 20 genera
+genus_abundance_AP <- psmelt(physeq_AP) %>%
+  group_by(Genus) %>%
+  summarize(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+top20_genus <- genus_abundance_AP$Genus
+
+gen_legend <- scale_fill_manual(values = genus_colours,
+                                     breaks = top20_genus)
+
+#agglomerate to genus level
+physeq_AP_genus <- tax_glom(physeq_AP, taxrank = "Genus")
+
+
+AP_genus_bar <- plot_bar(physeq_AP_genus, fill = "Genus") +
+  gen_legend +
+  theme_linedraw() + 
+    theme(axis.text.x = element_markdown(angle = 45, hjust = 1, size = 8), 
+    legend.position = "right",         
+    legend.direction = "vertical",     
+    legend.text = element_text(size = 10, face = "italic"), 
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.key.size = unit(1.5, "lines"),
+    plot.title = element_text(size = 15, face = "bold")) +
+  ggtitle("Relative abundance in Agro-Pastoralist samples: Genus") +
+  ylab("Relative abundance") +
+  guides(fill = guide_legend(ncol = 1, title = "Top 20 Genera")) + 
+  facet_wrap(~stunting, scales = "free_x") +
+  scale_x_discrete(labels = function(x) {ifelse(x %in% mysamples,
+           paste0("**", x, "**"), x)}) +
+  geom_bar(stat = "identity", position = "stack", color = NA)
+AP_genus_bar
+```
+
+```{r}
+# P
+# top 20 genera
+genus_abundance_P <- psmelt(physeq_P) %>%
+  group_by(Genus) %>%
+  summarize(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+top20_genus_P <- genus_abundance_P$Genus
+
+gen_legend_P <- scale_fill_manual(values = genus_colours,
+                                     breaks = top20_genus_P)
+
+#agglomerate to family level
+physeq_P_gen <- tax_glom(physeq_P, taxrank = "Genus")
+
+P_gen_bar <- plot_bar(physeq_P_gen, fill = "Genus") +
+  gen_legend_P +
+  theme_linedraw() + 
+    theme(axis.text.x = element_markdown(angle = 45, hjust = 1, size = 8), 
+    legend.position = "right",         
+    legend.direction = "vertical",     
+    legend.text = element_text(size = 10, face = "italic"), 
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.key.size = unit(1.5, "lines"),
+    plot.title = element_text(size = 15, face = "bold")) +
+  ggtitle("Relative abundance in Pastoralist samples: Genus") +
+  ylab("Relative abundance") +
+  guides(fill = guide_legend(ncol = 1, title = "Top 20 Genera")) +
+  facet_wrap(~stunting, scales = "free_x") +
+  scale_x_discrete(labels = function(x) {ifelse(x %in% mysamples,
+           paste0("**", x, "**"), x)}) +
+  geom_bar(stat = "identity", position = "stack", color = NA) +
+  geom_col(colour = NA)
+
+P_gen_bar
+```
+
+```{r}
+# Taxa prevalence in AP 
+#pdf("TaxPrevalence_AP.pdf", width = 10) # add when ready to save
+AP_prev_fam <- plot_taxa_prevalence(physeq_AP, "Family") +
+  theme_linedraw() +
+  ggtitle("Taxa prevalence in Agro-Pastoralist samples: Family level") +
+  theme(legend.position = "none",
+        strip.text = element_text(face = "italic"))+
+  scale_fill_manual(values = family_colours)
+
+#dev.off()
+
+AP_prev_fam
+```
+
+```{r}
+# Taxa prevalence in P 
+#pdf("TaxPrevalence_P.pdf", width = 10) # add when ready to save
+P_prev_fam <- plot_taxa_prevalence(physeq_P, "Family") +
+  theme_linedraw() +
+  ggtitle("Taxa prevalence in Pastoralist samples: Family level") +
+  theme(legend.position = "none",
+        strip.text = element_text(face = "italic"))+
+  scale_fill_manual(values = family_colours)
+
+#dev.off()
+
+P_prev_fam
+```
+
+can do with genus too
+
+
+## Family - top 20s
+### SICs only
+```{r}
+# Agglomerate at selected level, select top 20 most abundant and prune subsets
+top_20_fam <- tax_glom(physeq_sic_rel, taxrank = "Family")
+Top20 <- names(sort(taxa_sums(top_20_fam), TRUE)[1:20])
+top_20_fam <- prune_taxa(Top20, top_20_fam)
+
+# Convert phyloseq object to a dataframe using psmelt
+df_top_20_fam <- psmelt(top_20_fam)
+
+# reorder
+df_top_20_fam$Family <- factor(df_top_20_fam$Family, 
+                                levels = names(sort(tapply(
+                                  df_top_20_fam$Abundance, df_top_20_fam$Family, mean),
+                                  decreasing = TRUE)))
+
+# Create the boxplot
+fam_20_boxplot <- ggplot(df_top_20_fam, aes(x = Family, y = Abundance, fill = Family, colour = Family)) +
+  geom_boxplot(outlier.shape = 16, outlier.size = 1, alpha = 0.6, lwd = 0.5) +
+  scale_fill_manual(values = family_colours) +
+  scale_color_manual(values = family_colours) +
+  theme_linedraw() +
+  scale_y_log10() +
+  labs(title = "Family relative abundances across SICs",
+       subtitle = "Top 20") +
+  ylab("Relative Abundance (log<sub>10</sub>)") +
+  xlab("Family") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, face = "italic"),  # Rotate x-axis labels for readability
+        axis.title.x = element_blank(),
+        axis.title.y = element_markdown(),
+        legend.text = element_text(face = "italic"),
+        plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic", colour = "firebrick")) +
+  guides(colour = "none", fill = "none") +
+  facet_grid(stunting~group)
+
+# Display the boxplot
+fam_20_boxplot
+
+```
+### faecal samples only
+```{r}
+# Agglomerate at selected level, select top 20 most abundant and prune subsets
+top_20_fam <- tax_glom(physeq_poop_rel, taxrank = "Family")
+Top20 <- names(sort(taxa_sums(top_20_fam), TRUE)[1:20])
+top_20_fam <- prune_taxa(Top20, top_20_fam)
+
+# Convert phyloseq object to a dataframe using psmelt
+df_top_20_fam <- psmelt(top_20_fam)
+
+# reorder
+df_top_20_fam$Family <- factor(df_top_20_fam$Family, 
+                                levels = names(sort(tapply(
+                                  df_top_20_fam$Abundance, df_top_20_fam$Family, mean),
+                                  decreasing = TRUE)))
+
+# Create the boxplot
+fam_20_boxplot <- ggplot(df_top_20_fam, aes(x = Family, y = Abundance, fill = Family, colour = Family)) +
+  geom_boxplot(outlier.shape = 16, outlier.size = 1, alpha = 0.6, lwd = 0.5) +
+  scale_fill_manual(values = family_colours) +
+  scale_color_manual(values = family_colours) +
+  theme_linedraw() +
+  scale_y_log10() +
+  labs(title = "Family relative abundances across SICs",
+       subtitle = "Top 20") +
+  ylab("Relative Abundance (log<sub>10</sub>)") +
+  xlab("Family") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, face = "italic"),  # Rotate x-axis labels for readability
+        axis.title.x = element_blank(),
+        axis.title.y = element_markdown(),
+        legend.text = element_text(face = "italic"),
+        plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic", colour = "firebrick")) +
+  guides(colour = "none", fill = "none") +
+  facet_grid(stunting~group)
+
+# Display the boxplot
+fam_20_boxplot
+
+```
+
+## genus
+```{r}
+# Genus colurs
+all_genera <- unique(tax_table(physeq_all_filtered)[, "Genus"])
+num_genera <- length(all_genera)
+
+Genus_colours <- setNames(distinctColorPalette(num_genera), all_genera)
+
+length(Genus_colours) # 321
+```
+
+Plotting at a different taxonomic level
+### SICs only
+```{r}
+# Agglomerate at selected level, select top 10 most abundant and prune subsets
+top_20 <- tax_glom(physeq_sic_rel, taxrank = "Genus")
+Top20_ap <- names(sort(taxa_sums(top_20), TRUE)[1:20])
+top_20 <- prune_taxa(Top20_ap, top_20)
+
+# Convert phyloseq object to a dataframe using psmelt
+df_top_20 <- psmelt(top_20)
+
+# reorder
+df_top_20$Genus <- factor(df_top_20$Genus, 
+                                levels = names(sort(tapply(
+                                  df_top_20$Abundance, df_top_20$Genus, mean),
+                                  decreasing = TRUE)))
+
+# Create the boxplot
+ap_20_boxplot <- ggplot(df_top_20, aes(x = Genus, y = Abundance, fill = Genus, colour = Genus)) +
+  geom_boxplot(outlier.shape = 16, outlier.size = 1, alpha = 0.6, lwd = 0.5) +
+  scale_fill_manual(values = Genus_colours) +
+  scale_color_manual(values = Genus_colours) +
+  theme_linedraw() +
+  scale_y_log10() +
+  labs(title = "Genus relative abundances across SICs",
+       subtitle = "Top 20") +
+  ylab("Relative Abundance (log<sub>10</sub>)") +
+  xlab("Genus") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, face = "italic"),  # Rotate x-axis labels for readability
+        axis.title.x = element_blank(),
+        axis.title.y = element_markdown(),
+        legend.text = element_text(face = "italic"),
+        plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic", colour = "midnightblue")) +
+  guides(colour = "none", fill = "none") +
+  facet_grid(stunting~group)
+
+# Display the boxplot
+ap_20_boxplot
+```
+
+### faecal samples only
+```{r}
+# Agglomerate at selected level, select top 10 most abundant and prune subsets
+top_20 <- tax_glom(physeq_poop_rel, taxrank = "Genus")
+Top20_ap <- names(sort(taxa_sums(top_20), TRUE)[1:20])
+top_20 <- prune_taxa(Top20_ap, top_20)
+
+# Convert phyloseq object to a dataframe using psmelt
+df_top_20 <- psmelt(top_20)
+
+# reorder
+df_top_20$Genus <- factor(df_top_20$Genus, 
+                                levels = names(sort(tapply(
+                                  df_top_20$Abundance, df_top_20$Genus, mean),
+                                  decreasing = TRUE)))
+
+# Create the boxplot
+ap_20_boxplot <- ggplot(df_top_20, aes(x = Genus, y = Abundance, fill = Genus, colour = Genus)) +
+  geom_boxplot(outlier.shape = 16, outlier.size = 1, alpha = 0.6, lwd = 0.5) +
+  scale_fill_manual(values = Genus_colours) +
+  scale_color_manual(values = Genus_colours) +
+  theme_linedraw() +
+  scale_y_log10() +
+  labs(title = "Genus relative abundances across SICs",
+       subtitle = "Top 20") +
+  ylab("Relative Abundance (log<sub>10</sub>)") +
+  xlab("Genus") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, face = "italic"),  # Rotate x-axis labels for readability
+        axis.title.x = element_blank(),
+        axis.title.y = element_markdown(),
+        legend.text = element_text(face = "italic"),
+        plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic", colour = "midnightblue")) +
+  guides(colour = "none", fill = "none") +
+  facet_grid(stunting~group)
+ # facet_wrap(~stunting, ncol = 1)
+
+# Display the boxplot
+ap_20_boxplot
+```
+
+# Relative abundance of top families in the FAECAL samples
+using physeq_poop_rel
+  - by community
+  - by stunting
+
+## by family
+```{r}
+physeq_poop_rel # no NAs in family, no need to subset
+
+# top 20
+physeq_poop_rel_20 <- psmelt(physeq_poop_rel) %>%
+  filter(!grepl("Unassigned", Family)) %>% # take off unassigned stuff
+  group_by(Family) %>%
+  summarise(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+# list of top 20 families in the FAECAL samples
+top20fam_sample <- physeq_poop_rel_20$Family
+```
+
+```{r}
+# top 20 families
+families20_poop <- physeq_poop_rel
+families20_poop <- tax_glom(families20_poop, "Family")
+families20_poop <- subset_taxa(families20_poop, Family %in% top20fam_sample)
+#into a df
+families20_poop <- psmelt(families20_poop)
+
+# check unique levels in the relevant columns
+unique(families20_poop$group)   
+unique(families20_poop$stunting)
+unique(families20_poop$Family) 
+
+# Check if there are any missing values
+sum(is.na(families20_poop$group))
+sum(is.na(families20_poop$Abundance))
+sum(is.na(families20_poop$stunting))
+sum(is.na(families20_poop$Family))
+
+families20_poop$group <- as.factor(families20_poop$group)
+families20_poop$stunting <- as.factor(families20_poop$stunting)
+
+# Add a small constant (1) to avoid log(0) if using log transformation
+families20_poop$Abundance <- families20_poop$Abundance + 1  # Add a constant value 
+#families20_poop <- families20_poop %>%
+#  filter(Abundance > 0)
+#OR just take NAs off
+```
+
+### boxplot with wilcox 
+is there a way to adjust p-values in this?
+need to make sure I check that the labelling is correct?
+#### family - poop - group
+```{r}
+fam_20_box_poop <- ggplot(families20_poop, aes(x = group, y = Abundance)) +
+  geom_boxplot(aes(color = group, fill = group), alpha = 0.5) +
+  geom_point(aes(color = group)) +
+  facet_wrap(~Family) +
+  theme_linedraw() +
+  scale_y_log10() +
+  geom_signif(comparisons = list(c("Agro-Pastoralist", "Pastoralist")),
+              test = "wilcox.test",  # Use Wilcoxon test for non-parametric comparisons
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = 0.2,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5) + 
+  labs(title = "Relative abundance of the top 20 Families (Faecal Samples)",
+       subtitle = "by Community") +
+  ylab("Relative abundance (log<sub>10</sub>+1)") +
+  xlab("Community") +
+  theme(plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic", colour = "salmon"),
+        axis.title.y = element_markdown(),  
+        axis.text.x = element_blank(),
+        strip.text = element_text(face = "italic")) +
+  guides(color = guide_legend(title = "Community")) +
+  scale_fill_manual(values = group_colours) +  
+  scale_color_manual(values = group_colours) +
+  guides(fill = "none")
+  
+
+fam_20_box_poop
+```
+
+#### family - poop - stunting
+```{r}
+fam_20_box_poop <- ggplot(families20_poop, aes(x = stunting, y = Abundance)) +
+  geom_boxplot(aes(color = stunting, fill = stunting), alpha = 0.5) +
+  geom_point(aes(color = stunting)) +
+  facet_wrap(~Family) +
+  theme_linedraw() +
+  scale_y_log10() +
+  geom_signif(comparisons = list(c("Stunted", "Not Stunted")),
+              test = "wilcox.test",  # Use Wilcoxon test for non-parametric comparisons
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = 0.2,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5) + 
+  labs(title = "Relative abundance of the top 20 Families (Faecal Samples)",
+       subtitle = "by Stunting Status") +
+  ylab("Relative abundance (log<sub>10</sub>+1)") +
+  xlab("Stunting Status") +
+  theme(plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic", colour = "firebrick"),
+        axis.title.y = element_markdown(),  
+        axis.text.x = element_blank(),
+        strip.text = element_text(face = "italic")) +
+  guides(color = guide_legend(title = "Community")) +
+  scale_fill_manual(values = stun_colours) +  
+  scale_color_manual(values = stun_colours) +
+  guides(fill = "none")
+ # expand_limits(y = c(0.01, 2))
+  
+
+fam_20_box_poop
+```
+
+### by genus
+```{r}
+physeq_poop_rel # no NAs in Genus, no need to subset
+
+# top 20
+physeq_poop_rel_gen_20 <- psmelt(physeq_poop_rel) %>%
+  filter(!grepl("Unassigned", Genus)) %>% # take off unassigned stuff
+  group_by(Genus) %>%
+  summarise(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+# list of top 20 families in the FAECAL samples
+top20gen_sample <- physeq_poop_rel_gen_20$Genus
+```
+
+```{r}
+# top 20 families
+genera20_poop <- physeq_poop_rel
+genera20_poop <- tax_glom(genera20_poop, "Genus")
+genera20_poop <- subset_taxa(genera20_poop, Genus %in% top20gen_sample)
+#into a df
+genera20_poop <- psmelt(genera20_poop)
+
+# check unique levels in the relevant columns
+unique(genera20_poop$group)   
+unique(genera20_poop$stunting)
+unique(genera20_poop$Genus) 
+
+# Check if there are any missing values
+sum(is.na(genera20_poop$group))
+sum(is.na(genera20_poop$Abundance))
+sum(is.na(genera20_poop$stunting))
+sum(is.na(genera20_poop$Genus))
+
+genera20_poop$group <- as.factor(genera20_poop$group)
+genera20_poop$stunting <- as.factor(genera20_poop$stunting)
+
+# Add a small constant (1) to avoid log(0) if using log transformation
+genera20_poop$Abundance <- genera20_poop$Abundance + 1  # Add a constant value 
+#genera20_poop <- genera20_poop %>%
+#  filter(Abundance > 0)
+#OR just take NAs off
+```
+#### genus - poop - group
+```{r}
+gen_20_box_poop <- ggplot(genera20_poop, aes(x = group, y = Abundance)) +
+  geom_boxplot(aes(color = group, fill = group), alpha = 0.5) +
+  geom_point(aes(color = group)) +
+  facet_wrap(~Genus) +
+  theme_linedraw() +
+  scale_y_log10() +
+  geom_signif(comparisons = list(c("Agro-Pastoralist", "Pastoralist")),
+              test = "wilcox.test",  # Use Wilcoxon test for non-parametric comparisons
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = 0.175,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5) + 
+  labs(title = "Relative abundance of the top 20 Genera (Faecal Samples)",
+       subtitle = "by Community") +
+  ylab("Relative abundance (log<sub>10</sub>+1)") +
+  xlab("Community") +
+  theme(plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic", colour = "cornflowerblue"),
+        axis.title.y = element_markdown(),  
+        axis.text.x = element_blank(),
+        strip.text = element_text(face = "italic")) +
+  guides(color = guide_legend(title = "Community")) +
+  scale_fill_manual(values = group_colours) +  
+  scale_color_manual(values = group_colours) +
+  guides(fill = "none")
+  
+
+gen_20_box_poop
+```
+
+#### genus - poop - stunting
+```{r}
+gen_20_box_poop <- ggplot(genera20_poop, aes(x = stunting, y = Abundance)) +
+  geom_boxplot(aes(color = stunting, fill = stunting), alpha = 0.5) +
+  geom_point(aes(color = stunting)) +
+  facet_wrap(~Genus) +
+  theme_linedraw() +
+  scale_y_log10() +
+  geom_signif(comparisons = list(c("Stunted", "Not Stunted")),
+              test = "wilcox.test",  # Use Wilcoxon test for non-parametric comparisons
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = 0.175,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5) + 
+  labs(title = "Relative abundance of the top 20 Genera (Faecal Samples)",
+       subtitle = "by Stunting Status") +
+  ylab("Relative abundance (log<sub>10</sub>+1)") +
+  xlab("Stunting Status") +
+  theme(plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic", colour = "midnightblue"),
+        axis.title.y = element_markdown(),  
+        axis.text.x = element_blank(),
+        strip.text = element_text(face = "italic")) +
+  guides(color = guide_legend(title = "Community")) +
+  scale_fill_manual(values = stun_colours) +  
+  scale_color_manual(values = stun_colours) +
+  guides(fill = "none")
+ # expand_limits(y = c(0.01, 2))
+  
+
+gen_20_box_poop
+```
+
+# Relative abundance of top families in the SIC STABILITY samples
+using physeq_sic_rel
+  - by community
+  - by stunting
+  ## by family
+```{r}
+physeq_sic_rel
+
+# top 20
+physeq_sic_rel_20 <- psmelt(physeq_sic_rel) %>%
+  filter(!grepl("Unassigned", Family)) %>% # take off unassigned stuff
+  group_by(Family) %>%
+  summarise(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+# list of top 20 families in the FAECAL samples
+top20fam_sample_sic <- physeq_sic_rel_20$Family
+```
+
+```{r}
+# top 20 families
+families20_sic <- physeq_sic_rel
+families20_sic <- tax_glom(families20_sic, "Family")
+families20_sic <- subset_taxa(families20_sic, Family %in% top20fam_sample_sic)
+#into a df
+families20_sic <- psmelt(families20_sic)
+
+# check unique levels in the relevant columns
+unique(families20_sic$group)   
+unique(families20_sic$stunting)
+unique(families20_sic$Family) 
+
+# Check if there are any missing values
+sum(is.na(families20_sic$group))
+sum(is.na(families20_sic$Abundance))
+sum(is.na(families20_sic$stunting))
+sum(is.na(families20_sic$Family))
+
+families20_sic$group <- as.factor(families20_sic$group)
+families20_sic$stunting <- as.factor(families20_sic$stunting)
+
+# Add a small constant (1) to avoid log(0) if using log transformation
+families20_sic$Abundance <- families20_sic$Abundance + 1  # Add a constant value 
+#families20_sic <- families20_sic %>%
+#  filter(Abundance > 0)
+#OR just take NAs off
+```
+
+### boxplot with wilcox 
+is there a way to adjust p-values in this?
+need to make sure I check that the labelling is correct?
+#### family - sic - group
+```{r}
+fam_20_box_sic <- ggplot(families20_sic, aes(x = group, y = Abundance)) +
+  geom_boxplot(aes(color = group, fill = group), alpha = 0.5) +
+  geom_point(aes(color = group)) +
+  facet_wrap(~Family) +
+  theme_linedraw() +
+  scale_y_log10() +
+  geom_signif(comparisons = list(c("Agro-Pastoralist", "Pastoralist")),
+              test = "wilcox.test",  # Use Wilcoxon test for non-parametric comparisons
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = 0.2,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5) + 
+  labs(title = "Relative abundance of the top 20 Families (Stability SICs)",
+       subtitle = "by Community") +
+  ylab("Relative abundance (log<sub>10</sub>+1)") +
+  xlab("Community") +
+  theme(plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic", colour = "salmon"),
+        axis.title.y = element_markdown(),  
+        axis.text.x = element_blank(),
+        strip.text = element_text(face = "italic")) +
+  guides(color = guide_legend(title = "Community")) +
+  scale_fill_manual(values = group_colours) +  
+  scale_color_manual(values = group_colours) +
+  guides(fill = "none")
+  
+
+fam_20_box_sic
+```
+
+#### family - sic - stunting
+```{r}
+fam_20_box_sic <- ggplot(families20_sic, aes(x = stunting, y = Abundance)) +
+  geom_boxplot(aes(color = stunting, fill = stunting), alpha = 0.5) +
+  geom_point(aes(color = stunting)) +
+  facet_wrap(~Family) +
+  theme_linedraw() +
+  scale_y_log10() +
+  geom_signif(comparisons = list(c("Stunted", "Not Stunted")),
+              test = "wilcox.test",  # Use Wilcoxon test for non-parametric comparisons
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = 0.2,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5) + 
+  labs(title = "Relative abundance of the top 20 Families (Stability SICs)",
+       subtitle = "by Stunting Status") +
+  ylab("Relative abundance (log<sub>10</sub>+1)") +
+  xlab("Stunting Status") +
+  theme(plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic", colour = "firebrick"),
+        axis.title.y = element_markdown(),  
+        axis.text.x = element_blank(),
+        strip.text = element_text(face = "italic")) +
+  guides(color = guide_legend(title = "Community")) +
+  scale_fill_manual(values = stun_colours) +  
+  scale_color_manual(values = stun_colours) +
+  guides(fill = "none")
+ # expand_limits(y = c(0.01, 2))
+  
+
+fam_20_box_sic
+```
+
+### by genus
+```{r}
+physeq_sic_rel
+
+# top 20
+physeq_sic_rel_gen_20 <- psmelt(physeq_sic_rel) %>%
+  filter(!grepl("Unassigned", Genus)) %>% # take off unassigned stuff
+  group_by(Genus) %>%
+  summarise(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+# list of top 20 families in the FAECAL samples
+top20gen_sample <- physeq_sic_rel_gen_20$Genus
+```
+
+```{r}
+# top 20 families
+genera20_sic <- physeq_sic_rel
+genera20_sic <- tax_glom(genera20_sic, "Genus")
+genera20_sic <- subset_taxa(genera20_sic, Genus %in% top20gen_sample)
+#into a df
+genera20_sic <- psmelt(genera20_sic)
+
+# check unique levels in the relevant columns
+unique(genera20_sic$group)   
+unique(genera20_sic$stunting)
+unique(genera20_sic$Genus) 
+
+# Check if there are any missing values
+sum(is.na(genera20_sic$group))
+sum(is.na(genera20_sic$Abundance))
+sum(is.na(genera20_sic$stunting))
+sum(is.na(genera20_sic$Genus))
+
+genera20_sic$group <- as.factor(genera20_sic$group)
+genera20_sic$stunting <- as.factor(genera20_sic$stunting)
+
+# Add a small constant (1) to avoid log(0) if using log transformation
+genera20_sic$Abundance <- genera20_sic$Abundance + 1  # Add a constant value 
+#genera20_sic <- genera20_sic %>%
+#  filter(Abundance > 0)
+#OR just take NAs off
+```
+#### genus - sic - group
+```{r}
+gen_20_box_sic <- ggplot(genera20_sic, aes(x = group, y = Abundance)) +
+  geom_boxplot(aes(color = group, fill = group), alpha = 0.5) +
+  geom_point(aes(color = group)) +
+  facet_wrap(~Genus) +
+  theme_linedraw() +
+  scale_y_log10() +
+  geom_signif(comparisons = list(c("Agro-Pastoralist", "Pastoralist")),
+              test = "wilcox.test",  # Use Wilcoxon test for non-parametric comparisons
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = 0.175,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5) + 
+  labs(title = "Relative abundance of the top 20 Genera (Stability SICs)",
+       subtitle = "by Community") +
+  ylab("Relative abundance (log<sub>10</sub>+1)") +
+  xlab("Community") +
+  theme(plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic", colour = "cornflowerblue"),
+        axis.title.y = element_markdown(),  
+        axis.text.x = element_blank(),
+        strip.text = element_text(face = "italic")) +
+  guides(color = guide_legend(title = "Community")) +
+  scale_fill_manual(values = group_colours) +  
+  scale_color_manual(values = group_colours) +
+  guides(fill = "none")
+  
+
+gen_20_box_sic
+```
+
+#### genus - sic - stunting
+```{r}
+gen_20_box_sic <- ggplot(genera20_sic, aes(x = stunting, y = Abundance)) +
+  geom_boxplot(aes(color = stunting, fill = stunting), alpha = 0.5) +
+  geom_point(aes(color = stunting)) +
+  facet_wrap(~Genus) +
+  theme_linedraw() +
+  scale_y_log10() +
+  geom_signif(comparisons = list(c("Stunted", "Not Stunted")),
+              test = "wilcox.test",  # Use Wilcoxon test for non-parametric comparisons
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = 0.2,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5) + 
+  labs(title = "Relative abundance of the top 20 Genera (Stability SICs)",
+       subtitle = "by Stunting Status") +
+  ylab("Relative abundance (log<sub>10</sub>+1)") +
+  xlab("Stunting Status") +
+  theme(plot.title = element_text(size = 15, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic", colour = "midnightblue"),
+        axis.title.y = element_markdown(),  
+        axis.text.x = element_blank(),
+        strip.text = element_text(face = "italic")) +
+  guides(color = guide_legend(title = "Community")) +
+  scale_fill_manual(values = stun_colours) +  
+  scale_color_manual(values = stun_colours) +
+  guides(fill = "none")
+ # expand_limits(y = c(0.01, 2))
+  
+
+gen_20_box_sic
+```
+
+can also do all together but is there a point?
+
+
+
+# heatmap - ??
+
+shouldn't rareify my samples as during sequencing they should all have an equal (generally) sequencing depth.
+
+# Alpha diversity
+using physeq_all_filtered
+- do I need a phylogenetic tree?
+
+```{r}
+# agglomerate to family level 
+physeq_family <- physeq_all_filtered_pcoa #tax_glom(physeq_all_filtered_pcoa, taxrank = "Family")
+
+# change sample_data with new labels
+sample_data(physeq_family)$group <- factor(sample_data(physeq_family)$group,
+                                           levels = c("Agro-Pastoralist",
+                                                      "Agro-Pastoralist (faecal sample)",
+                                                      "Pastoralist",
+                                                      "Pastoralist (faecal sample)"),
+                                           labels = c("AP (SIC)", "AP (Faeces)", "P (SIC)", "P (Faeces)"))
+
+# change sample_data with new labels
+sample_data(physeq_family)$stunting <- factor(sample_data(physeq_family)$stunting,
+                                           levels = c("Stunted",
+                                                      "Stunted (faecal sample)",
+                                                      "Not Stunted",
+                                                      "Not Stunted (faecal sample)"),
+                                           labels = c("Stunted (SIC)", "Stunted (Faeces)", "Not Stunted (SIC)", "Not Stunted (Faeces)"))
+
+```
+
+
+```{r}
+alpha_div <- plot_richness(physeq_family, x = "group",
+                           measures = c("Observed", "Shannon", "InvSimpson"),
+                           title = "Alpha-diversity at ASV level according to community",
+                           color = "group") +
+  geom_boxplot(aes(x = group, y = value, color = group, fill = group), alpha = 0.5) +
+  theme_linedraw() +
+  scale_color_manual(values = ap_p_colours) + 
+  scale_fill_manual(values = ap_p_colours) + 
+  theme(axis.text.x.bottom = element_blank(),
+        axis.text = element_text(size = 8), 
+        axis.title = element_text(size = 8, face = "bold"),
+        plot.title = element_text(size = 10, face = "bold"), 
+        strip.text.x = element_text(face = "bold"),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.text = element_text(size = 8)) +
+  xlab("Community") +
+  guides(fill = "none") +
+  geom_signif(comparisons = list(c("AP (SIC)", "AP (Faeces)"),
+                                  c("P (SIC)", "P (Faeces)")),
+              test = "wilcox.test",
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = c(0.2, 0.5),
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5,
+              colour = "black") 
+
+alpha_div
+
+```
+
+```{r}
+stun_sep_colours <- c("Stunted (SIC)" = "goldenrod1", 
+                      "Not Stunted (SIC)" = "mediumpurple1", 
+                      "Stunted (Faeces)" = "goldenrod4", 
+                      "Not Stunted (Faeces)" = "mediumpurple4")
+
+alpha_div_stun <-  plot_richness(physeq_family, x= "stunting",
+                               measures=c("Observed", "Shannon", "InvSimpson"),
+                               title = "Alpha-diversity at ASV level according to stunting status",
+                               color = "stunting") +
+  geom_boxplot(aes(x = stunting, y = value, color = stunting, fill = stunting), alpha = 0.5) +
+  theme_linedraw() +
+  scale_color_manual(values = stun_sep_colours) + 
+  scale_fill_manual(values = stun_sep_colours) + 
+  theme(axis.text.x.bottom = element_blank(),
+        axis.text=element_text(size = 8), 
+        axis.title = element_text(size = 8,face="bold"),
+        plot.title =element_text(size = 10,face="bold"), 
+        strip.text.x = element_text(face="bold" ),
+        legend.position = "bottom", legend.title = element_blank(),
+        legend.text = element_text(size = 8)) +
+  xlab("Stunting Status") +
+  guides(fill = "none") +
+  geom_signif(comparisons = list(c("Stunted (SIC)", "Stunted (Faeces)"),
+                                   c("Not Stunted (SIC)", "Not Stunted (Faeces)")),
+              test = "wilcox.test",  # wilcoxon test
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              y_position = c(0.2, 0.5),
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.5,
+              colour = "black") 
+
+alpha_div_stun
+
+```
+
+```{r}
+# Numerical values of alpha diversity
+resultsalpha <- estimate_richness(physeq_all_filtered_pcoa,
+                                measures = c("Observed", "Chao1", "Shannon", "InvSimpson"))
+```
+
+# beta diversity - all samples
+
+## Removing singeltons
+```{r}
+# to colour by sample
+sample_data(physeq_family)$SampleCore <- gsub("_.*", "", sample_data(physeq_family)$fastqID)
+physeq_pruned <- physeq_family
+
+sample_colours <- c(
+  "AP013C1" = "#BC6C29",    # brown-orange
+  "AP017C2" = "#4CD2C3",    # turquoise
+  "AP018C2" = "#807C8A",    # greyish purple
+  "AP022C1" = "#6EFF2C",    # lime green
+  "AP041C1" = "#4D56E4",    # medium blue
+  "AP049C1" = "#A7DFDB",    # light teal
+  "AP052C1" = "#D9CFE0",    # lavender grey
+  "AP055C1" = "#C3F7A8",    # mint green
+  "AP066C2" = "#D2B82C",    # golden yellow
+  "AP111C1" = "#4A65D2",    # steel blue
+  "AP120C1" = "#4ABBE1",    # sky blue
+  "AP125C1" = "#556D4C",    # dark olive green
+  "P017C1"  = "#82FB82",    # light green
+  "P020C1"  = "#443A66",    # dark purple
+  "P032C3"  = "#D5CC6B",    # light khaki
+  "P044C2"  = "#F731C6",    # neon magenta
+  "P052C1"  = "#D88F87",    # salmon pink
+  "P056C1"  = "#7A26E8",    # bright purple
+  "P057C1"  = "#DB91DE",    # orchid pink
+  "P073C2"  = "#DF3F76",    # rose
+  "P075C1"  = "#D9F943",    # lime yellow
+  "P102C2"  = "#E1DABC",    # beige
+  "P103C1"  = "#E13B3B",    # bright red
+  "P111C1"  = "#DDA4D1"     # pale pink
+)
+
+# To remove singletons: 
+# How many singletons?
+length(which(taxa_sums(physeq_pruned)== 1))
+# 4 singletons
+
+# prune taxa that are singletons
+#physeq_pruned = prune_taxa(taxa_sums(physeq_pruned)> 1, physeq_pruned)
+#length(which(taxa_sums(physeq_pruned)== 1))
+# 0 singletons
+
+# Remove samples with sum abundance under 1000
+# no cos we want all the samples no?
+# physeq_pruned = prune_samples(sample_sums(physeq_pruned)>= 1000, physeq_pruned)
+physeq_pruned <- tax_glom(physeq_pruned, "Family")
+#Log transform
+# add pseudo count due to zero inflated data
+physeq_pruned_log <- transform_sample_counts(physeq_pruned, function(x) log(1+x))
+```
+
+## Distance
+```{r}
+# Bray-Curtis
+dist.bc <- distance(physeq_pruned_log, method = "bray")
+
+# Jaccard
+dist.jac <- distance(physeq_pruned_log, method = "jaccard")
+
+# make a proper one if I want to include this
+# Tree addition
+#phylo_tree = rtree(ntaxa(physeq_pruned_log), rooted=TRUE, tip.label=taxa_names(physeq_pruned_log))
+#physeq_tree <- merge_phyloseq(physeq_pruned_log, phylo_tree)
+#physeq_tree
+
+# UniFrac
+#dist.uf <- distance(physeq_pruned_log, method = "unifrac")
+# Weighted UniFrac
+
+#dist.wuf <- distance(physeq_pruned_log, method = "wunifrac")
+```
+
+### Bray-Curtis
+
+```{r}
+test_PCoAbray <- ordinate(physeq_pruned_log, "PCoA", distance = dist.bc)
+
+
+bc_pcoa <- plot_ordination(physeq_pruned_log, test_PCoAbray, 
+                                type = "samples", color = "SampleCore", shape = "stunting") + 
+  theme_linedraw() +
+  scale_shape_manual(values = c("Stunted (SIC)" = 16, "Not Stunted (SIC)" = 17, 
+                                "Stunted (Faeces)" = 1, "Not Stunted (Faeces)" = 2)) +
+  labs(title = "PCoA - family level (Bray-Curtis distance)",
+       subtitle = "SICs & Faecal Samples") +
+  scale_color_manual(values = sample_colours) + 
+  geom_point(aes(color = SampleCore, shape = stunting), size = 2, stroke = 1) +
+  guides(color = guide_legend(title = "SampleID"),
+         shape = guide_legend(title = "Stunting Status")) + # legend guides
+  theme(plot.title = element_text(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, face = "bold.italic", colour = "forestgreen"))
+#  coord_cartesian(xlim = c(-0.3, 0), expand = TRUE)
+bc_pcoa
+
+#test_NMDSbray <- ordinate(physeq_pruned_log, "NMDS", "bray")
+```
+
+PERMANOVA 
+```{r}
+# Extract metadata
+meta_pcoa <- data.frame(sample_data(physeq_pruned_log))
+
+# Create SampleCoreType column: Faeces or SIC
+meta_pcoa$SampleCoreType <- ifelse(grepl("Faeces", meta_pcoa$group), "Faeces", "SIC")
+
+# Check result
+table(meta_pcoa$SampleCoreType)
+
+# Run PERMANOVA testing community differences between SIC and Faeces
+permanova_sic_faeces <- adonis2(dist.bc ~ SampleCoreType, data = meta_pcoa, permutations = 9999)
+
+# View result
+permanova_sic_faeces
+
+pvals <- permanova_sic_faeces$`Pr(>F)`[1]
+pvals_adj <- p.adjust(pvals, method = "BH")
+pvals_adj
+```
+
+
+
+# beta diversity - faecal samples
+
+## Removing singeltons
+```{r}
+# agglomerate to family level 
+physeq_poop_family <- tax_glom(physeq_poop_filtered, taxrank = "Family")
+
+# change sample_data with new labels
+sample_data(physeq_poop_family)$group <- factor(sample_data(physeq_poop_family)$group,
+                                           levels = c("Agro-Pastoralist",
+                                                      "Pastoralist"),
+                                           labels = c("AP (Faeces)", "P (Faeces)"))
+
+# change sample_data with new labels
+sample_data(physeq_poop_family)$stunting <- factor(sample_data(physeq_poop_family)$stunting,
+                                           levels = c("Stunted",
+                                                      "Not Stunted"),
+                                           labels = c("Stunted (Faeces)", "Not Stunted (Faeces)"))
+
+
+
+physeq_pruned_poop <- physeq_poop_family
+
+# To remove singletons: 
+# How many singletons?
+length(which(taxa_sums(physeq_pruned_poop)== 1))
+# 4 singletons
+
+# prune taxa that are singletons
+physeq_pruned_poop = prune_taxa(taxa_sums(physeq_pruned_poop)> 1, physeq_pruned_poop)
+length(which(taxa_sums(physeq_pruned_poop)== 1))
+# 0 singletons
+
+# Remove samples with sum abundance under 1000
+# no cos we want all the samples no?
+# physeq_pruned = prune_samples(sample_sums(physeq_pruned)>= 1000, physeq_pruned)
+
+#Log transform
+# add pseudo count due to zero inflated data
+physeq_pruned_log_poop <- transform_sample_counts(physeq_pruned_poop, function(x) log(1+x))
+```
+
+## Distance
+```{r}
+# Bray-Curtis
+dist.bc_poop <- distance(physeq_pruned_log_poop, method = "bray")
+
+# Jaccard
+dist.jac_poop <- distance(physeq_pruned_log_poop, method = "jaccard")
+
+# make a proper one if I want to include this
+# Tree addition
+#phylo_tree = rtree(ntaxa(physeq_pruned_log), rooted=TRUE, tip.label=taxa_names(physeq_pruned_log))
+#physeq_tree <- merge_phyloseq(physeq_pruned_log, phylo_tree)
+#physeq_tree
+
+# UniFrac
+#dist.uf <- distance(physeq_pruned_log, method = "unifrac")
+# Weighted UniFrac
+
+#dist.wuf <- distance(physeq_pruned_log, method = "wunifrac")
+```
+
+### Bray-Curtis
+
+```{r}
+test_PCoAbray_poop <- ordinate(physeq_pruned_log_poop, "PCoA", distance = dist.bc_poop)
+
+
+bc_pcoa_poop <- plot_ordination(physeq_pruned_log_poop, test_PCoAbray_poop, 
+                                type = "samples", color = "group", shape = "stunting") + 
+  theme_linedraw() +
+  scale_shape_manual(values = c("Stunted (Faeces)" = 1, "Not Stunted (Faeces)" = 2)) +
+  labs(title = "PCoA - family level (Bray-Curtis distance)",
+       subtitle = "Faecal Samples") +
+  scale_color_manual(values = ap_p_colours) + 
+  geom_point(aes(color = group, shape = stunting), size = 2, stroke = 1) +
+  guides(color = guide_legend(title = "Community"),
+         shape = guide_legend(title = "Stunting Status")) + # legend guides
+  theme(plot.title = element_text(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "royalblue1"))
+#  coord_cartesian(xlim = c(-0.3, 0), expand = TRUE)
+bc_pcoa_poop
+
+#test_NMDSbray <- ordinate(physeq_pruned_log, "NMDS", "bray")
+```
+
+
+# beta diversity - faecal samples
+
+## Removing singeltons
+```{r}
+# agglomerate to family level 
+physeq_sic_family <- tax_glom(physeq, taxrank = "Family")
+
+# change sample_data with new labels
+sample_data(physeq_sic_family)$group <- factor(sample_data(physeq_sic_family)$group,
+                                           levels = c("Agro-Pastoralist",
+                                                      "Pastoralist"),
+                                           labels = c("AP (SIC)", "P (SIC)"))
+
+# change sample_data with new labels
+sample_data(physeq_sic_family)$stunting <- factor(sample_data(physeq_sic_family)$stunting,
+                                           levels = c("Stunted",
+                                                      "Not Stunted"),
+                                           labels = c("Stunted (SIC)", "Not Stunted (SIC)"))
+
+physeq_pruned_sic <- physeq_sic_family
+
+# To remove singletons: 
+# How many singletons?
+length(which(taxa_sums(physeq_pruned_sic)== 1))
+# 4 singletons
+
+# prune taxa that are singletons
+physeq_pruned_sic = prune_taxa(taxa_sums(physeq_pruned_sic)> 1, physeq_pruned_sic)
+length(which(taxa_sums(physeq_pruned_sic)== 1))
+# 0 singletons
+
+# Remove samples with sum abundance under 1000
+# no cos we want all the samples no?
+# physeq_pruned = prune_samples(sample_sums(physeq_pruned)>= 1000, physeq_pruned)
+
+#Log transform
+# add pseudo count due to zero inflated data
+physeq_pruned_log_sic <- transform_sample_counts(physeq_pruned_sic, function(x) log(1+x))
+```
+
+## Distance
+```{r}
+# Bray-Curtis
+dist.bc_sic <- distance(physeq_pruned_log_sic, method = "bray")
+
+# Jaccard
+dist.jac_sic <- distance(physeq_pruned_log_sic, method = "jaccard")
+
+# make a proper one if I want to include this
+# Tree addition
+#phylo_tree = rtree(ntaxa(physeq_pruned_log), rooted=TRUE, tip.label=taxa_names(physeq_pruned_log))
+#physeq_tree <- merge_phyloseq(physeq_pruned_log, phylo_tree)
+#physeq_tree
+
+# UniFrac
+#dist.uf <- distance(physeq_pruned_log, method = "unifrac")
+# Weighted UniFrac
+
+#dist.wuf <- distance(physeq_pruned_log, method = "wunifrac")
+```
+
+### Bray-Curtis
+
+```{r}
+test_PCoAbray_sic <- ordinate(physeq_pruned_log_sic, "PCoA", distance = dist.bc_sic)
+
+
+bc_pcoa_sic <- plot_ordination(physeq_pruned_log_sic, test_PCoAbray_sic, 
+                                type = "samples", color = "group", shape = "stunting") + 
+  theme_linedraw() +
+  scale_shape_manual(values = c("Stunted (SIC)" = 16, "Not Stunted (SIC)" = 17)) +
+  labs(title = "PCoA - family level (Bray-Curtis distance)",
+       subtitle = "Stability SICs") +
+  scale_color_manual(values = ap_p_colours) + 
+  geom_point(aes(color = group, shape = stunting), size = 2, stroke = 1) +
+  guides(color = guide_legend(title = "Community"),
+         shape = guide_legend(title = "Stunting Status")) + # legend guides
+  theme(plot.title = element_text(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, face = "italic", colour = "goldenrod"))
+#  coord_cartesian(xlim = c(-0.3, 0), expand = TRUE)
+bc_pcoa_sic
+
+#test_NMDSbray <- ordinate(physeq_pruned_log, "NMDS", "bray")
+```
+
+can also do arrow plots if I need/want them
+and heatmaps
+
+
+
+---------------------- will try this if my code is all ok ----------------------
+So in my code I first create phyloseq objects for the SIC and the original stool samples (OS)
+I merge them and making sure I called the rownames for the taxonomy and abundance differently (ASVSIC and ASVOS for example)
+Then I use this phyloseq object (ps_ctrl) to create the plot either at family level or genus level
+
+physeq_all
+```{r}
+# add Sample column to physeq_all md to say Faeces or SIC
+md_fix <- as.data.frame(sample_data(physeq_all))
+md_fix$Sample <- ifelse(rownames(md_fix) %in% mysamples, "Faeces",
+                    ifelse(rownames(md_fix) %in% SICs, "SIC", NA))
+md_fix$SampleID <- ifelse(is.na(md_fix$SampleID), md_fix$fastqID, md_fix$SampleID)
+md_fix$fastqID <- ifelse(is.na(md_fix$fastqID), md_fix$SampleID, md_fix$fastqID)
+
+sample_data(physeq_all) <- sample_data(md_fix)
+```
+
+```{r}
+compare_faeces_to_sics <- function(physeq_all, mysamples, taxrank = "Family") {
+  # agg to specified taxonomic rank and get relative abundances
+  venn_ps_fam <- tax_glom(physeq_all, taxrank)
+  venn_ps_fam_rel <- transform_sample_counts(venn_ps_fam, function(x) x / sum(x))
+  
+  tax_table_df <- as.data.frame(tax_table(venn_ps_fam_rel))
+  tax_table_df$OTU <- rownames(tax_table_df)
+  
+  all_sample_names <- sample_names(venn_ps_fam_rel)
+  
+  result_list <- list()
+  
+  for (sample in mysamples) {
+    # make faecs and SICs
+    replicate_ids <- paste0(sample, "_", 1:3)
+    existing_replicates <- replicate_ids[replicate_ids %in% all_sample_names]
+  
+  print(paste("Checking sample:", sample))
+  print(paste("Existing replicates:", paste(existing_replicates, collapse = ", ")))
+  print(paste("Faecal sample present:", sample %in% all_sample_names))
+    
+    # make sure there's at least one replicate
+    if (!(sample %in% all_sample_names) || length(existing_replicates) == 0) {
+      warning(paste("Skipping", sample, "- missing faecal sample or SIC replicates"))
+      next
+    }
+    
+    # combine
+    all_ids <- c(sample, existing_replicates)
+    
+    # subset phyloseq object to these samples
+    sub_ps <- prune_samples(sample_names(venn_ps_fam_rel) %in% all_ids, venn_ps_fam_rel)
+    sub_ps <- prune_taxa(taxa_sums(sub_ps) > 0, sub_ps)
+    
+    # melt
+    melted <- psmelt(sub_ps)
+    melted$Group <- ifelse(grepl("_[1-3]$", melted$Sample), "SIC", "Faeces")
+    
+    # is each family (OTU) present in each group of "experiments
+    presence <- melted %>%
+      group_by(OTU, Group) %>%
+      summarise(Present = any(Abundance > 0), .groups = "drop") %>%
+      pivot_wider(names_from = Group, values_from = Present, values_fill = FALSE)
+    
+    # shared or unique
+    classified <- presence %>%
+      mutate(
+        UniqueShare = case_when(
+          Faeces & SIC ~ "Shared",
+          Faeces & !SIC ~ "Faeces only",
+          !Faeces & SIC ~ "SIC only",
+          TRUE ~ "Absent"
+        ),
+        Sample = sample
+      ) %>%
+      filter(UniqueShare != "Absent")
+    
+    # taxonomy info and rename taxon column
+    classified <- left_join(classified, tax_table_df, by = "OTU") %>%
+      rename(Taxon = !!sym(taxrank))
+    
+    # result
+    result_list[[sample]] <- classified
+  }
+  
+  # into a data frame
+  result_df <- bind_rows(result_list)
+  return(result_df)
+}
+
+```
+
+```{r}
+share_df <- compare_faeces_to_sics(physeq_all, mysamples, taxrank = "Family")
+```
+```{r}
+venn_bar_counts <- share_df %>%
+  group_by(Sample, UniqueShare, Taxon) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  rename(Family = Taxon)
+
+venn_bar_rel <- venn_bar_counts %>%
+  group_by(Sample, UniqueShare) %>%
+  summarise(RelAbun = sum(Count)/6)
+```
+
+```{r}
+# plot
+shared_bar <- ggplot(venn_bar_counts, aes(x = Sample, y = Count, fill = UniqueShare)) +
+  geom_bar(stat = "identity", position = "fill", color = NA) + 
+  ylab(" Abundance") +
+  xlab("Sample") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(values = c("Faeces only" = "salmon",
+                               "Shared" = "seagreen",
+                               "SIC only" = "lightskyblue")) +
+  theme_linedraw() +
+  theme(plot.title = element_text(size = 12, face = "bold"),
+        panel.grid = element_blank()) +
+  labs(title = "Presence of bacterial families in Faeces and Stability SICs",
+       fill = NULL)
+
+shared_bar
+```
+
+```{r}
+# only need one replicate
+samps <- sample_names(physeq_all)
+
+# Keep samples with no underscore OR ending in _1
+keep_samps <- samps[grep("(_1$)|(^[^_]+$)", samps)]
+
+# Subset phyloseq
+physeq_venn <- prune_samples(keep_samps, physeq_all)
+physeq_venn_rel <- transform_sample_counts(physeq_venn, function(x) x / sum(x))
+```
+
+```{r}
+#library(devtools)
+#install_github("Russel88/MicEco")
+#library(MicEco)
+
+# Agglomerate to Family level
+physeq_fam <- tax_glom(physeq_venn_rel, taxrank = "Species")
+
+# Get unique base sample names (before _1 suffix)
+base_samples <- unique(gsub("_1$", "", sample_names(physeq_fam)))
+
+# Initialize output list
+venn_results <- list()
+
+# Loop through base samples
+for (samp in base_samples) {
+  faeces_id <- samp
+  sic_id <- paste0(samp, "_1")
+  
+  # Skip if either sample is missing
+  if (!(faeces_id %in% sample_names(physeq_fam)) | !(sic_id %in% sample_names(physeq_fam))) {
+    next
+  }
+  
+  # Subset and clean
+  sub_ps <- prune_samples(c(faeces_id, sic_id), physeq_fam)
+  sub_ps <- prune_taxa(taxa_sums(sub_ps) > 0, sub_ps)
+  
+  # Use "Sample" as the grouping column in your metadata
+  venn_obj <- ps_venn(sub_ps, "Sample", fraction = 0, weight = FALSE, relative = TRUE, plot = FALSE)
+  
+  # Melt
+  melted <- psmelt(sub_ps)
+  melted$UniqueShare <- NA
+  melted$SampleBase <- samp
+  
+  # Label groups
+  melted$UniqueShare[melted$OTU %in% venn_obj$Sample] <- "Faeces"
+  melted$UniqueShare[melted$OTU %in% venn_obj$SIC] <- "SICs"
+  melted$UniqueShare[melted$OTU %in% venn_obj$Sample__SIC] <- "Shared"
+  
+  # Store results
+  venn_results[[samp]] <- melted
+}
+
+# Combine into one data frame
+venn_df <- bind_rows(venn_results)
+
+# Summarise mean relative abundance per group
+venn_grouped <- venn_df %>%
+  group_by(SampleBase, UniqueShare) %>%
+  summarise(RelAbun = sum(Abundance), .groups = "drop")
+
+# Optional: plot stacked bar chart
+ggplot(venn_grouped, aes(x = SampleBase, y = RelAbun, fill = UniqueShare)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(values = c("Faeces" = "salmon", "Shared" = "seagreen", "SICs" = "skyblue")) +
+  labs(x = "Sample", y = "Relative abundance (%)", fill = NULL,
+       title = "Shared vs Unique Bacterial Species") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+ctrl_ps_fam <- tax_glom(ps_ctrl, "Family")
+experiments <- as.list(as.matrix(unique(sample_data(ctrl_ps_fam)[,2])))
+# Loop over each experiment
+for (i in 1:10) {
+  exp_data <- subset_samples(ctrl_ps_fam, SIC == experiments[i])
+  exp_data <- prune_taxa(taxa_sums(exp_data)> 0, exp_data)
+  unique_sample <- ps_venn(exp_data, “Type”,fraction = 0,weight = FALSE,relative = TRUE,plot = FALSE)$Sample
+  unique_sic <- ps_venn(exp_data, “Type”,fraction = 0,weight = FALSE,relative = TRUE,plot = FALSE)$SIC
+  common_samp_sic <- ps_venn(exp_data, “Type”,fraction = 0,weight = FALSE,relative = TRUE,plot = FALSE)$Sample__SIC
+  exp_data_m <- psmelt(exp_data)
+  exp_data_m <- exp_data_m %>%
+    mutate(UniqueShare = “”)
+  exp_data_m$UniqueShare[which(exp_data_m$OTU %in% unique_sample)] <- “Feces”
+  exp_data_m$UniqueShare[which(exp_data_m$OTU %in% unique_sic)] <- “SICs”
+  exp_data_m$UniqueShare[which(exp_data_m$OTU %in% common_samp_sic)] <- “Shared”
+  if (i == 1) {ctrlF_share = exp_data_m} else {ctrlF_share <- rbind(ctrlF_share, exp_data_m)}
+}
+ctrlF_share_grouped <- ctrlF_share %>%
+  group_by(SIC, UniqueShare) %>%
+  summarise(RelAbun = sum(Abundance)/6)
+mean(ctrlF_share_grouped$RelAbun[which(ctrlF_share_grouped$UniqueShare==“Shared”)])
+figS4a <- ctrlF_share_grouped %>%
+  ggplot(aes_string(x = “SIC”, y = “RelAbun”, fill = “UniqueShare”)) +
+  geom_bar(stat = “identity”, position = “stack”) +
+  scale_fill_manual(values = pal_3, name = “Sample”) +
+  facet_grid(~SIC, scales = “free_x”) +
+  theme_bw() +
+  theme(legend.position = “right”,
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 45, hjust = 1),
+        axis.ticks.x=element_blank()) +
+  ylab(“Relative abundance (%)“) +
+  ggtitle(“Family”)
+```
+
+
+
+
+
+### Arrow plot - Faecal samples (physeq_poop_filtered)
+```{r}
+# Agglomerate phyloseq at Family
+physeq_arrow_poop <- tax_glom(physeq_poop_filtered, "Family")
+physeq_arrow_poop #  taxa and  samples
+
+# OTU table 
+OTU_arr = as(otu_table(physeq_arrow_poop), "matrix")
+otu_arr <- as.data.frame(OTU_arr)
+# Tax table
+TAX_arr = as(tax_table(physeq_arrow_poop), "matrix")
+tax_arr <- as.data.frame(TAX_arr)
+# Metadata table
+META_arr = as(sample_data(physeq_arrow_poop), "matrix")
+meta_arr <- as.data.frame(META_arr)
+
+# Binding otu and tax table
+tax_otu <-cbind(tax_arr, otu_arr)
+
+# Remove columns unused for the names
+tax_otu <-tax_otu[, -(1:4)]
+tax_otu <-tax_otu[, -(2:3)]
+
+# Combine Genus and Species names
+#tax_otu$Name <- str_c(tax_otu$Genus, '_', tax_otu$Species)
+# Change number as it corresponds to the last column of the dataframe
+tax_otu[, 1]<-as.character(tax_otu[, 1])
+length(unique(tax_otu[,1])) # 100 unique families
+# If not unique names:
+tax_otu[, 1]<-make.unique(tax_otu[, 1]) # Now 121 unique genera
+
+# Assign rownames as familiy names
+rownames(tax_otu) <- tax_otu[,1]
+# remove columns with names
+tax_otu <-tax_otu[, -1]
+
+tax_otu <- t(tax_otu)
+class(tax_otu) <- "numeric"
+tax_otu <- as.data.frame(tax_otu)
+
+# No NAs in the dataset
+length(which(is.na(tax_otu)==TRUE))
+#if NA:
+#tax_otu[is.na(tax_otu)] <- 0 #convert NAs to zeros
+
+## PCoA
+    # First step is to calculate a distance matrix. 
+    # Here we use Bray-Curtis distance metric
+# Log transform
+tax_otu_log <-transform(tax_otu[, 1:121], 'log10')
+
+# distance matrix
+dist <- vegdist(tax_otu_log[, 1:121],  method = "bray")
+PCOA <- pcoa(dist)
+
+# Save vectors axis 1 and 2 values from the PCoA, rows are samples
+vectorPCOA <- cbind(PCOA$vectors[, 1:2])
+
+# Include species level Abundances in Ordination 
+# Fits an environmental vector or factor onto an ordination
+env.fit <- envfit(vectorPCOA, tax_otu_log[,1:121], perm = 999)
+## This step might not work on our personal laptop
+# If so, run it on the computer in Youzheng and Simon's office
+
+# Contain fitted score for each species (axis 1 and 2)
+env.fit.sig  <- as.data.frame(scores(env.fit, display = "vectors"))
+
+# Extracting significant pvalues from envfit taxa
+ls_vec <- as.list(env.fit$vectors)
+
+# Creating p.values dataframe
+pvals <- as.data.frame(ls_vec$pvals)
+
+# Arrows coordinate
+arrows<-as.data.frame(ls_vec$arrows*sqrt(ls_vec$r))
+
+# Combined coordinate and pvalues
+arr_pvals <- cbind(arrows, pvals)
+
+# Save table
+#write.table(arr_pvals,"Envfit_arrowsAxis_pVal.txt",sep="\t",row.names=FALSE)
+
+# Subset: select pval <= 0.001 to select significant genus
+arr_pvals_red <- subset(arr_pvals, pvals<=0.05)
+arr_pvals_red <- cbind(arr_pvals_red, family = rownames(arr_pvals_red))
+
+## Format taxa scores for plotting
+df_envfit <- scores(env.fit,display=c("vectors"))
+df_envfit <- df_envfit*vegan:::ordiArrowMul(df_envfit)
+df_envfit <- as.data.frame(df_envfit)
+df_envfit$family <- rownames(df_envfit)
+df_envfit <- df_envfit %>% filter(family %in% arr_pvals_red$family)
+
+## Get PCOA scores of axis 1 and 2 for each sample
+# Use the score returned by the PCoA
+ft.scores <- as.data.frame(vectorPCOA)
+ft.scores$fastqID <- rownames(tax_otu)
+
+# Verify same number of samples
+which(rownames(meta_arr) != rownames(ft.scores))
+
+# Paste metadata to PCoA scores for plotting
+ft.scores$stunting <- meta_arr$stunting
+ft.scores$group <- meta_arr$group
+
+# Get distinct rows
+ft.scores.d <- distinct(ft.scores)
+# ft.score.d contain sample PCoA scores for axis 1 and 2
+# df.envfit contain species score for axis 1 and 2
+stun_colours <- c("Stunted" = "lightgoldenrod2", "Not Stunted" = "mediumaquamarine")
+  
+group_colours <- c("Pastoralist" = "salmon", "Agro-Pastoralist" = "cornflowerblue")
+
+## Plot ordination with arrows
+faec_arrow <- ggplot() +
+  geom_point(aes(ft.scores.d$Axis.1,ft.scores.d$Axis.2,
+                   colour =ft.scores.d$group, shape = ft.scores.d$stunting), size = 1, stroke = 1) + 
+  theme_linedraw() +
+  scale_shape_manual(values = c("Stunted" = 1, "Not Stunted" = 2)) + # 16/17 for SICs
+  scale_color_manual(values = group_colours) +
+  geom_segment(aes(x = 0, y = 0, xend = df_envfit$Axis.1*0.5,
+                   yend = df_envfit$Axis.2*0.5),
+               arrow = arrow(length = unit(0.2, "cm")),
+               color="#808080",alpha=0.5) +
+geom_text(data = df_envfit, 
+          aes(x = Axis.1*0.52, y = Axis.2*0.52, label = family),
+          color = "black", alpha = 0.5, size = 3, fontface = "italic") +# can adjust overlap settings with geom_text_repel and max.overlaps
+  ggtitle("Families driving clustering using BrayCurtis distance and PCoA") +
+  xlab("Axis 1") +
+  ylab("Axis 2") +
+  labs(colour = "Community", shape = "Stunting Status",
+       subtitle = "Faecal samples") +
+  theme(plot.title = element_text(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, face = "bold.italic", colour = "firebrick"))
+
+faec_arrow
+```
+
+### Arrow plot - SICs (phseq)
+```{r}
+# Agglomerate phyloseq at Family
+physeq_arrow_SIC <- tax_glom(physeq, "Family")
+physeq_arrow_SIC #  taxa and  samples
+
+# OTU table 
+OTU_arr = as(otu_table(physeq_arrow_SIC), "matrix")
+otu_arr <- as.data.frame(OTU_arr)
+# Tax table
+TAX_arr = as(tax_table(physeq_arrow_SIC), "matrix")
+tax_arr <- as.data.frame(TAX_arr)
+# Metadata table
+META_arr = as(sample_data(physeq_arrow_SIC), "matrix")
+meta_arr <- as.data.frame(META_arr)
+
+# Binding otu and tax table
+tax_otu <-cbind(tax_arr, otu_arr)
+
+# Remove columns unused for the names
+tax_otu <-tax_otu[, -(1:4)]
+tax_otu <-tax_otu[, -(2:3)]
+
+# Combine Genus and Species names
+#tax_otu$Name <- str_c(tax_otu$Genus, '_', tax_otu$Species)
+# Change number as it corresponds to the last column of the dataframe
+tax_otu[, 1]<-as.character(tax_otu[, 1])
+length(unique(tax_otu[,1])) # 89 unique families
+# If not unique names:
+tax_otu[, 1]<-make.unique(tax_otu[, 1]) # Now still 89 unique genera
+
+# Assign rownames as familiy names
+rownames(tax_otu) <- tax_otu[,1]
+# remove columns with names
+tax_otu <-tax_otu[, -1]
+
+tax_otu <- t(tax_otu)
+class(tax_otu) <- "numeric"
+tax_otu <- as.data.frame(tax_otu)
+
+# No NAs in the dataset
+length(which(is.na(tax_otu)==TRUE))
+#if NA:
+#tax_otu[is.na(tax_otu)] <- 0 #convert NAs to zeros
+
+## PCoA
+    # First step is to calculate a distance matrix. 
+    # Here we use Bray-Curtis distance metric
+# Log transform
+tax_otu_log <-transform(tax_otu[, 1:89], 'log10')
+
+# distance matrix
+dist <- vegdist(tax_otu_log[, 1:89],  method = "bray")
+PCOA <- pcoa(dist)
+
+# Save vectors axis 1 and 2 values from the PCoA, rows are samples
+vectorPCOA <- cbind(PCOA$vectors[, 1:2])
+
+# Include species level Abundances in Ordination 
+# Fits an environmental vector or factor onto an ordination
+env.fit <- envfit(vectorPCOA, tax_otu_log[,1:89], perm = 999)
+## This step might not work on our personal laptop
+# If so, run it on the computer in Youzheng and Simon's office
+
+# Contain fitted score for each species (axis 1 and 2)
+env.fit.sig  <- as.data.frame(scores(env.fit, display = "vectors"))
+
+# Extracting significant pvalues from envfit taxa
+ls_vec <- as.list(env.fit$vectors)
+
+# Creating p.values dataframe
+pvals <- as.data.frame(ls_vec$pvals)
+
+# Arrows coordinate
+arrows<-as.data.frame(ls_vec$arrows*sqrt(ls_vec$r))
+
+# Combined coordinate and pvalues
+arr_pvals <- cbind(arrows, pvals)
+
+# Save table
+#write.table(arr_pvals,"Envfit_arrowsAxis_pVal.txt",sep="\t",row.names=FALSE)
+
+# Subset: select pval <= 0.001 to select significant genus
+arr_pvals_red <- subset(arr_pvals, pvals<=0.05)
+arr_pvals_red <- cbind(arr_pvals_red, family = rownames(arr_pvals_red))
+
+## Format taxa scores for plotting
+df_envfit <- scores(env.fit,display=c("vectors"))
+df_envfit <- df_envfit*vegan:::ordiArrowMul(df_envfit)
+df_envfit <- as.data.frame(df_envfit)
+df_envfit$family <- rownames(df_envfit)
+df_envfit <- df_envfit %>% filter(family %in% arr_pvals_red$family)
+
+## Get PCOA scores of axis 1 and 2 for each sample
+# Use the score returned by the PCoA
+ft.scores <- as.data.frame(vectorPCOA)
+ft.scores$fastqID <- rownames(tax_otu)
+
+# Verify same number of samples
+which(rownames(meta_arr) != rownames(ft.scores))
+
+# Paste metadata to PCoA scores for plotting
+ft.scores$stunting <- meta_arr$stunting
+ft.scores$group <- meta_arr$group
+
+# Get distinct rows
+ft.scores.d <- distinct(ft.scores)
+# ft.score.d contain sample PCoA scores for axis 1 and 2
+# df.envfit contain species score for axis 1 and 2
+
+## Plot ordination with arrows
+SIC_arrow <- ggplot() +
+  geom_point(aes(ft.scores.d$Axis.1,ft.scores.d$Axis.2,
+                   colour =ft.scores.d$group, shape = ft.scores.d$stunting), size = 1, stroke = 1) + 
+  theme_linedraw() +
+  scale_shape_manual(values = c("Stunted" = 16, "Not Stunted" = 17)) + # 16/17 for SICs
+  scale_color_manual(values = group_colours) +
+  geom_segment(aes(x = 0, y = 0, xend = df_envfit$Axis.1*0.5,
+                   yend = df_envfit$Axis.2*0.5),
+               arrow = arrow(length = unit(0.2, "cm")),
+               color="#808080",alpha=0.5) +
+geom_text(data = df_envfit, 
+          aes(x = Axis.1*0.52, y = Axis.2*0.52, label = family),
+          color = "black", alpha = 0.5, size = 3, fontface = "italic") +# can adjust overlap settings with geom_text_repel and max.overlaps
+  ggtitle("Families driving clustering using BrayCurtis distance and PCoA") +
+  xlab("Axis 1") +
+  ylab("Axis 2") +
+  labs(colour = "Community", shape = "Stunting Status",
+       subtitle = "Stability SICs") +
+  theme(plot.title = element_text(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, face = "bold.italic", colour = "midnightblue"))
+
+SIC_arrow
+```
+
+
+

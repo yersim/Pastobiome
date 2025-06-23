@@ -1,0 +1,1786 @@
+---
+title: "perturbation_analysis"
+author: "Jazmine Mote"
+date: "2025-06-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+set wd, load libraries
+```{r}
+setwd("/Volumes/RECHERCHE/FAC/FBM/DMF/pvonaesc/default/D2c/Jazmine Mote/SICs/16S Results")
+
+if(!requireNamespace("BiocManager")){
+  install.packages("BiocManager")
+}
+
+library(tidyverse)
+library(phyloseq)
+library(readxl)
+library(randomcoloR)
+library(ggtext)
+library(ggsignif)
+library(microbiome)
+library(microbiomeMarker)
+
+```
+
+physeq from stability_analysis_new is the phyloseq of all stability SICs - run this first before running the following code
+```{r, colours}
+group_test_colours <- c("Agro-Pastoralist (Stability)" = "midnightblue",
+                        "Agro-Pastoralist (Inulin)" = "steelblue4",
+                        "Agro-Pastoralist (Starch)" = "cornflowerblue",
+                        "Agro-Pastoralist (MIX)" = "lightskyblue",
+                        "Pastoralist (Stability)" = "firebrick",
+                        "Pastoralist (Inulin)" = "indianred3",
+                        "Pastoralist (Starch)" = "salmon",
+                        "Pastoralist (MIX)" = "rosybrown2")
+
+AP_test_colours <- c("Stability" = "midnightblue",
+                     "Inulin" = "steelblue4",
+                     "Starch" = "cornflowerblue",
+                     "MIX" = "lightskyblue")
+
+P_test_colours <- c("Stability" = "darkred",
+                     "Inulin" = "indianred3",
+                     "Starch" = "salmon1",
+                     "MIX" = "rosybrown2")
+
+
+stun_test_colours <- c("Stunted (Stability)" = "darkgoldenrod4",
+                       "Stunted (Inulin)" = "darkgoldenrod",
+                       "Stunted (Starch)" = "darkgoldenrod1",
+                       "Stunted (MIX)" = "lightgoldenrod3",
+                       "Not Stunted (Stability)" = "darkgreen",
+                       "Not Stunted (Inulin)" = "mediumseagreen",
+                       "Not Stunted (Starch)" = "springgreen2",
+                       "Not Stunted (MIX)" = "palegreen")
+
+stun_test_colours <- c("Stability" = "darkgoldenrod4",
+                     "Inulin" = "darkgoldenrod",
+                     "Starch" = "darkgoldenrod1",
+                     "MIX" = "lightgoldenrod2")
+
+not_stun_test_colours <- c("Stability" = "darkgreen",
+                     "Inulin" = "mediumseagreen",
+                     "Starch" = "springgreen2",
+                     "MIX" = "palegreen")
+
+```
+
+# stability SIC names
+```{r}
+SICs <- c("AP022C1_1", "AP022C1_2", "AP022C1_3", #1
+          "AP013C1_1", "AP013C1_2", "AP013C1_3", #2
+          "AP018C2_1", "AP018C2_2", "AP018C2_3", #3
+          "AP017C2_1", "AP017C2_2", "AP017C2_3", #4
+          "AP049C1_1", "AP049C1_2", "AP049C1_3", #5
+          "AP066C2_1", "AP066C2_2", "AP066C2_3", #6
+          "AP052C1_1", "AP052C1_2", "AP052C1_3", #7
+          "AP041C1_1", "AP041C1_2", "AP041C1_3", #8
+          "AP120C1_1", "AP120C1_2", "AP120C1_3", #9
+          "AP125C1_1", "AP125C1_2", "AP125C1_3", #10
+          "AP055C1_1", "AP055C1_2", "AP055C1_3", #11
+          "AP111C1_1", "AP111C1_2", "AP111C1_3", #12
+          "P057C1_1", "P057C1_2", #13
+          "P020C1_1", "P020C1_2", "P020C1_3", #14
+          "P032C3_1", "P032C3_2", "P032C3_3", #15
+          "P102C2_1", "P102C2_2", "P102C2_3", #16
+          "P052C1_1", "P052C1_2", "P052C1_3", #17
+          "P111C1_1", "P111C1_2", "P111C1_3", #18
+          "P056C1_1", "P056C1_2", "P056C1_3", #19
+          "P103C1_1", "P103C1_2", "P103C1_3", #20
+          "P073C2_1", "P073C2_2", #21 - WILL NEED TO ADD S213 WHEN I FIGURE IT OUT
+          "P017C1_1", "P017C1_2", "P017C1_3",  #22
+          "P044C2_1", "P044C2_2", "P044C2_3", #23
+          "P075C1_1", "P075C1_2", "P075C1_3") #24
+```
+
+# perturbation data
+## 1. Taxonomy table
+```{r}
+tax_perturbations = read.delim("../DADA2/PERTURBATIONS/all/taxonomy_table_PASTOBIOME_PERTURBATIONS.txt") # change this to your taxonomy table
+# Check for duplicate in ASV names
+which(duplicated(row.names(tax))==TRUE)
+
+# assign "NAs" to higher taxonomy 
+tax_perturbations <- tax_perturbations %>%
+  mutate(Family  = ifelse(is.na(Family), str_c(Order, "_Unassigned"), Family),
+    Genus   = ifelse(is.na(Genus), str_c(Family, "_Unassigned"), Genus),
+    Species = ifelse(is.na(Species), str_c(Genus, "_unassigned"), Species))
+
+
+tax_perturbations <- tax_perturbations %>%
+  mutate(Species = ifelse(str_detect(Species, "_"),
+                          Species,                              # Keep as is if underscore is present
+                          str_c(Genus, " ", Species)))          # Otherwise, prepend Genus + space
+tax_perturbations <- as.matrix(tax_perturbations)
+
+# Create taxonomy formal class taxonomy table for the phyloseq
+taxonomy_perturbations <- tax_table(tax_perturbations)
+```
+
+## 2. ASV table
+```{r}
+# Importing merged sequence table, contains ASV count per samples 
+otu_perturbations <- read.delim("../DADA2/PERTURBATIONS/all/abundance_table_PASTOBIOME_PERTURBATIONS.txt", header = TRUE, sep = "\t")  # change this to your sequence table
+otu_perturbations <- as.data.frame(otu_perturbations)
+```
+
+```{r}
+# Transposition of OTU to matrix class and numerical values
+otu_perturbations <- as.matrix(otu_perturbations)
+class(otu_perturbations) <- "numeric"
+
+#Create taxa formal class otu_table based on otu matrix
+taxa_perturbations = otu_table(otu_perturbations, taxa_are_rows = TRUE)
+```
+
+## 3. Metadata
+```{r}
+# perturbation identifyer
+suffixes <- c("_s", "_i", "_m")
+
+# use md from when running stability results as a basis for making a new meta table 
+# add stability replicates
+md_perturbations <- md %>%
+  uncount(3) %>%  # duplicate each row twice (3 in total)
+  group_by(SampleID) %>%
+  mutate(SampleID = paste0(SampleID, "_", row_number())) %>%
+  ungroup()
+# add perturbations
+md_perturbations <- md_perturbations %>%
+  slice(rep(1:n(), each = 3)) %>%  # repeat row
+  group_by(SampleID) %>%
+  mutate(SampleID = paste0(SampleID, suffixes),
+         Test = case_when(endsWith(SampleID, "_s") ~ "Starch",
+                          endsWith(SampleID, "_i") ~ "Inulin",
+                          endsWith(SampleID, "_m") ~ "MIX")) %>%
+  ungroup()
+
+md_perturbations$SampleID_copy <- md_perturbations$SampleID
+md_perturbations <- md_perturbations %>%
+  column_to_rownames(var = "SampleID_copy")
+
+identical(rownames(md_perturbations), colnames(otu_perturbations)) # needs to be true
+
+# compare names
+setdiff(colnames(otu_perturbations), rownames(md_perturbations)) # which columns are in otu_perturbations but not in md_perturbations
+setdiff(rownames(md_perturbations), colnames(otu_perturbations)) # which rows in md_perturbations but not in otu_perturbations
+
+md_perturbations <- md_perturbations[order(rownames(md_perturbations)), ]
+otu_perturbations <- otu_perturbations[, order(colnames(otu_perturbations))]
+
+identical(rownames(md_perturbations), colnames(otu_perturbations)) # needs to be true
+
+# Assign row names as fastq ID (which should match the sample names/fatsq names in your OTU table)
+md_perturbations$fastqID <- row.names(md_perturbations)
+md_perturbations <- md_perturbations %>%
+  select(-SampleID)
+
+md_perturbations <- as.data.frame(md_perturbations)
+
+# Creating a sample data class for phyloseq
+metadata_perturbations <- sample_data(as.data.frame(md_perturbations))
+md_perturbations[] <- lapply(md_perturbations, function(x) if(is.factor(x)) as.character(x) else x)
+```
+
+## PHYLOSEQS CREATION
+```{r}
+physeq_perturbations = phyloseq(taxa_perturbations, taxonomy_perturbations, metadata_perturbations)
+
+physeq_perturbations # 1605 taxa in 216 samples
+```
+### MERGE PHYLOSEQS
+```{r}
+physeq_test <- merge_phyloseq(physeq, physeq_perturbations) 
+# these shouldn't need filtering for non-bacterial as they are all SICs
+
+# change Stability tests to "Stability"
+test_md <- as.data.frame(sample_data(physeq_test))
+test_md$Test[is.na(test_md$Test)] <- "Stability"
+sample_data(physeq_test) <- sample_data(test_md)
+```
+
+### Subset phyloseqs to AP and P & relative abundances
+```{r}
+physeq_test_AP <- subset_samples(physeq_test, group =="Agro-Pastoralist")
+physeq_test_AP # 2684 taxa and 144 samples
+
+# take off taxa with abundance 0
+physeq_test_AP <- prune_taxa(taxa_sums(physeq_test_AP)> 0, physeq_test_AP)
+
+# Relative abundance
+physeq_test_AP_rel <- transform_sample_counts(physeq_test_AP, function(x) x / sum(x))
+physeq_test_AP_rel # 1264 taxa and 144 samples
+```
+
+```{r}
+physeq_test_P <- subset_samples(physeq_test, group =="Pastoralist")
+physeq_test_P # 2684 taxa and 142 samples
+
+# take off taxa with abundance 0
+physeq_test_P <- prune_taxa(taxa_sums(physeq_test_P)> 0, physeq_test_P)
+
+# Relative abundance
+physeq_test_P_rel <- transform_sample_counts(physeq_test_P, function(x) x / sum(x))
+physeq_test_P_rel # 1688 taxa and 142 samples
+```
+
+```{r}
+physeq_test_stun <- subset_samples(physeq_test, stunting =="Stunted")
+physeq_test_stun # 2684 taxa and 142 samples
+
+# take off taxa with abundance 0
+physeq_test_stun <- prune_taxa(taxa_sums(physeq_test_stun)> 0, physeq_test_stun)
+
+# Relative abundance
+physeq_test_stun_rel <- transform_sample_counts(physeq_test_stun, function(x) x / sum(x))
+physeq_test_stun_rel # 1105 taxa and 142 samples
+```
+
+```{r}
+physeq_test_not_stun <- subset_samples(physeq_test, stunting =="Not Stunted")
+physeq_test_not_stun # 2684 taxa and 142 samples
+
+# take off taxa with abundance 0
+physeq_test_not_stun <- prune_taxa(taxa_sums(physeq_test_not_stun)> 0, physeq_test_not_stun)
+
+# Relative abundance
+physeq_test_not_stun_rel <- transform_sample_counts(physeq_test_not_stun, function(x) x / sum(x))
+physeq_test_not_stun_rel # 1867 taxa and 142 samples
+```
+
+# analysis
+we have:
+physeq -> stability SICs
+physeq_perturbations -> perturbation SICs
+physeq_test -> stability AND perturbation SICs all together
+
+physeq_test_AP/physeq_test_AP_rel -> physeq_test but only AP samples, and the rel abun version
+physeq_test_P/physeq_test_P_rel -> physeq_test but only P samples, and the rel abun version
+
+## colour sets
+```{r, FAMILY}
+all_families <- unique(tax_table(physeq_test)[, "Family"])
+
+# generate colours for every family
+num_families <- length(all_families)
+
+family_colours <- setNames(distinctColorPalette(num_families), all_families)
+
+length(family_colours) # 113
+```
+```{r, GENUS}
+all_genera <- unique(tax_table(physeq_test)[, "Genus"])
+
+# generate colours for every family
+num_genera <- length(all_genera)
+
+genus_colours <- setNames(distinctColorPalette(num_genera), all_genera)
+
+length(genus_colours) # 270
+```
+
+## Relative Abundances
+```{r, FAMILY (AP)}
+# top 20 families
+family_abundance_AP <- psmelt(physeq_test_AP_rel) %>%
+  group_by(Family) %>%
+  summarize(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+top20_family <- family_abundance_AP$Family
+
+# custom family colours
+custom_fam_colours <- c(
+  Enterococcaceae = "lightskyblue",
+  Streptococcaceae = "firebrick",
+  Enterobacteriaceae = "tan",
+  Peptostreptococcaceae = "mediumpurple1",
+  Bacteroidaceae = "powderblue",
+  Clostridiaceae = "lightgoldenrod2",
+  Lachnospiraceae = "lightgreen",
+  Oscillospiraceae = "olivedrab",
+  Ruminococcaceae = "lightpink",
+  Morganellaceae = "lemonchiffon2",
+  Tannerellaceae = "lightsalmon",
+  Barnesiellaceae = "salmon",
+  Eggerthellaceae = "plum1",
+  Coriobacteriaceae = "darkorchid4",
+  "Family XI" = "steelblue",
+  Erysipelatoclostridiaceae = "gray57",
+  Veillonellaceae = "palevioletred1",
+  Lactobacillaceae = "khaki4",
+  Butyricicoccaceae = "darkorange1",
+  Eubacteriaceae = "goldenrod1",
+  Fusobacteriaceae = "forestgreen",
+  Erysipelotrichaceae = "sienna",
+  Akkermansiaceae = "thistle4",
+  Bifidobacteriaceae = "royalblue3")
+
+# override colours for top20 fams
+family_colours[names(custom_fam_colours)] <- custom_fam_colours
+
+# Check length (should still be 113)
+length(family_colours)
+
+colours_fam <- tibble(Family = all_families,
+                      Colours = family_colours)
+
+fam_legend <- scale_fill_manual(values = family_colours,
+                                     breaks = top20_family)
+```
+
+```{r, FAMILY (AP)}
+#agglomerate to family level
+physeq_AP_fam <- tax_glom(physeq_test_AP_rel, taxrank = "Family")
+
+AP_fam_bar <- plot_bar(physeq_AP_fam, fill = "Family") +
+  fam_legend +
+  theme_linedraw() + 
+    theme(axis.text.x = element_markdown(angle = 45, hjust = 1, size = 6), 
+    legend.position = "right",         
+    legend.direction = "vertical",     
+    legend.text = element_text(size = 8, face = "italic"), 
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.key.size = unit(1, "lines"),
+    plot.title = element_text(size = 12, face = "bold")) +
+  ggtitle("Relative abundance in Agro-Pastoralist samples: Family") +
+  ylab("Relative abundance") +
+  guides(fill = guide_legend(ncol = 1, title = "Top 20 Families")) + 
+  facet_wrap(~stunting, scales = "free_x") +
+  scale_x_discrete(labels = function(x) {
+  x <- gsub("_s$", "_starch", x)
+  x <- gsub("_i$", "_inulin", x)
+  x <- gsub("_m$", "_MIX", x)
+  ifelse(x %in% SICs, paste0("**", x, "**"), x)}) +
+  geom_bar(stat = "identity", position = "stack", color = NA)
+
+AP_fam_bar
+```
+
+```{r, FAMILY (P)}
+# top 20 families
+family_abundance_P <- psmelt(physeq_test_P_rel) %>%
+  group_by(Family) %>%
+  summarize(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+top20_family_P <- family_abundance_P$Family
+
+fam_legend_P <- scale_fill_manual(values = family_colours,
+                                     breaks = top20_family_P)
+
+#agglomerate to family level
+physeq_P_fam <- tax_glom(physeq_test_P_rel, taxrank = "Family")
+
+P_fam_bar <- plot_bar(physeq_P_fam, fill = "Family") +
+  fam_legend_P +
+  theme_linedraw() + 
+    theme(axis.text.x = element_markdown(angle = 45, hjust = 1, size = 6), 
+    legend.position = "right",         
+    legend.direction = "vertical",     
+    legend.text = element_text(size = 8, face = "italic"), 
+    legend.title = element_text(size = 8, face = "bold"),
+    legend.key.size = unit(1, "lines"),
+    plot.title = element_text(size = 10, face = "bold")) +
+  ggtitle("Relative abundance in Pastoralist samples: Family") +
+  ylab("Relative abundance") +
+  guides(fill = guide_legend(ncol = 1, title = "Top 20 Families")) + 
+  facet_wrap(~stunting, scales = "free_x") +
+  scale_x_discrete(labels = function(x) {
+  x <- gsub("_s$", "_starch", x)
+  x <- gsub("_i$", "_inulin", x)
+  x <- gsub("_m$", "_MIX", x)
+  ifelse(x %in% SICs, paste0("**", x, "**"), x)}) +
+  geom_bar(stat = "identity", position = "stack", color = NA)
+
+P_fam_bar
+```
+
+
+```{r, trying a lefse}
+test_lefse <- run_lefse(physeq_test_AP_rel,
+                           wilcoxon_cutoff = 0.05,
+                           group = "Test",
+                           taxa_rank = "Genus",
+                           kw_cutoff = 0.05,
+                           multigrp_strat = FALSE,
+                           lda_cutoff = 2)
+
+test_lefse_plot <- plot_ef_bar(test_lefse) +
+  labs(title = "Differential taxa in test conditions",
+       subtitle = "Agro-Pastoralist samples (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 10),
+        axis.title = element_text(size = 8, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(size = 8),
+        plot.subtitle = element_text(size = 8, face = "bold.italic", colour = "grey"),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)) +
+  scale_fill_manual(values = AP_test_colours)
+
+test_lefse_plot
+```
+
+
+```{r, trying a lefse}
+test_lefse_P <- run_lefse(physeq_test_P_rel,
+                           wilcoxon_cutoff = 0.05,
+                           group = "Test",
+                           taxa_rank = "Genus",
+                           kw_cutoff = 0.05,
+                           multigrp_strat = FALSE,
+                           lda_cutoff = 2)
+
+test_lefse_plot_P <- plot_ef_bar(test_lefse_P) +
+  labs(title = "Differential taxa in test conditions",
+       subtitle = "Pastoralist samples (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 10),
+        axis.title = element_text(size = 8, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(size = 8),
+        plot.subtitle = element_text(size = 8, face = "bold.italic", colour = "grey"),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)) +
+  scale_fill_manual(values = P_test_colours)
+
+test_lefse_plot_P
+```
+
+```{r, trying a lefse}
+test_lefse_stun <- run_lefse(physeq_test_stun_rel,
+                           wilcoxon_cutoff = 0.05,
+                           group = "Test",
+                           taxa_rank = "Genus",
+                           kw_cutoff = 0.05,
+                           multigrp_strat = FALSE,
+                           lda_cutoff = 3)
+
+test_lefse_plot_stun <- plot_ef_bar(test_lefse_stun) +
+  labs(title = "Differential taxa in test conditions",
+       subtitle = "Stunted samples (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 10),
+        axis.title = element_text(size = 8, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(size = 8),
+        plot.subtitle = element_text(size = 8, face = "bold.italic", colour = "grey"),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)) +
+  scale_fill_manual(values = stun_test_colours)
+
+test_lefse_plot_stun
+```
+
+```{r, trying a lefse}
+test_lefse_not_stun <- run_lefse(physeq_test_not_stun_rel,
+                           wilcoxon_cutoff = 0.05,
+                           group = "Test",
+                           taxa_rank = "Species",
+                           kw_cutoff = 0.05,
+                           multigrp_strat = FALSE,
+                           lda_cutoff = 2)
+
+test_lefse_plot_not_stun <- plot_ef_bar(test_lefse_not_stun) +
+  labs(title = "Differential taxa in test conditions",
+       subtitle = "Non-stunted samples (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Species") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        axis.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 10, face = "italic"),
+        axis.title.x = element_markdown(),
+        plot.subtitle = element_text(size = 10, face = "bold.italic", colour = "grey")) +
+  scale_fill_manual(values = not_stun_test_colours)
+
+test_lefse_plot_not_stun
+```
+
+
+```{r, lefse AP, stun}
+physeq_test_stun_AP <- subset_samples(physeq_test_AP, stunting =="Stunted")
+physeq_test_stun_AP # 1264 taxa and 142 samples
+
+# take off taxa with abundance 0
+physeq_test_stun_AP <- prune_taxa(taxa_sums(physeq_test_stun_AP)> 0, physeq_test_stun_AP)
+
+# Relative abundance
+physeq_test_stun_AP_rel <- transform_sample_counts(physeq_test_stun_AP, function(x) x / sum(x))
+physeq_test_stun_AP_rel # 632 taxa and 142 samples
+```
+
+```{r, lefse AP, stun}
+physeq_test_not_stun_AP <- subset_samples(physeq_test_AP, stunting =="Not Stunted")
+physeq_test_not_stun_AP # 1264 taxa and 142 samples
+
+# take off taxa with abundance 0
+physeq_test_not_stun_AP <- prune_taxa(taxa_sums(physeq_test_not_stun_AP)> 0, physeq_test_not_stun_AP)
+
+# Relative abundance
+physeq_test_not_stun_AP_rel <- transform_sample_counts(physeq_test_not_stun_AP, function(x) x / sum(x))
+physeq_test_not_stun_AP_rel # 823 taxa and 142 samples
+```
+```{r, AP stun lefse}
+test_lefse_stun_AP <- run_lefse(physeq_test_stun_AP_rel,
+                           wilcoxon_cutoff = 0.05,
+                           group = "Test",
+                           taxa_rank = "Genus",
+                           kw_cutoff = 0.05,
+                           multigrp_strat = FALSE,
+                           lda_cutoff = 2)
+
+test_lefse_plot_stun_AP <- plot_ef_bar(test_lefse_stun_AP) +
+  labs(title = "Differential taxa in test conditions",
+       subtitle = "STUNTED Agro-Pastoralist samples (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 10),
+        axis.title = element_text(size = 8, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(size = 8),
+        plot.subtitle = element_text(size = 8, face = "bold.italic", colour = "grey"),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8))+
+  scale_fill_manual(values = stun_test_colours)
+
+test_lefse_plot_stun_AP
+```
+
+```{r, AP non stunted lefse}
+test_lefse_not_stun_AP <- run_lefse(physeq_test_not_stun_AP_rel,
+                           wilcoxon_cutoff = 0.05,
+                           group = "Test",
+                           taxa_rank = "Genus",
+                           kw_cutoff = 0.05,
+                           multigrp_strat = FALSE,
+                           lda_cutoff = 2)
+
+test_lefse_plot_not_stun_AP <- plot_ef_bar(test_lefse_not_stun_AP) +
+  labs(title = "Differential taxa in test conditions",
+       subtitle = "NON-STUNTED Agro-Pastoralist samples (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 10),
+        axis.title = element_text(size = 8, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(size = 8),
+        plot.subtitle = element_text(size = 8, face = "bold.italic", colour = "grey"),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)) +
+  scale_fill_manual(values = stun_test_colours)
+
+test_lefse_plot_not_stun_AP
+```
+
+```{r, lefse P, stun}
+physeq_test_stun_P <- subset_samples(physeq_test_P, stunting =="Stunted")
+physeq_test_stun_P # 1264 taxa and 142 samples
+
+# take off taxa with abundance 0
+physeq_test_stun_P <- prune_taxa(taxa_sums(physeq_test_stun_P)> 0, physeq_test_stun_P)
+
+# Relative abundance
+physeq_test_stun_P_rel <- transform_sample_counts(physeq_test_stun_P, function(x) x / sum(x))
+physeq_test_stun_P_rel # 632 taxa and 142 samples
+```
+
+```{r, lefse P, stun}
+physeq_test_not_stun_P <- subset_samples(physeq_test_P, stunting =="Not Stunted")
+physeq_test_not_stun_P # 1264 taxa and 142 samples
+
+# take off taxa with abundance 0
+physeq_test_not_stun_P <- prune_taxa(taxa_sums(physeq_test_not_stun_P)> 0, physeq_test_not_stun_P)
+
+# Relative abundance
+physeq_test_not_stun_P_rel <- transform_sample_counts(physeq_test_not_stun_P, function(x) x / sum(x))
+physeq_test_not_stun_P_rel # 823 taxa and 142 samples
+```
+```{r, P stun lefse}
+test_lefse_stun_P <- run_lefse(physeq_test_stun_P_rel,
+                           wilcoxon_cutoff = 0.05,
+                           group = "Test",
+                           taxa_rank = "Genus",
+                           kw_cutoff = 0.05,
+                           multigrp_strat = FALSE,
+                           lda_cutoff = 2)
+
+test_lefse_plot_stun_P <- plot_ef_bar(test_lefse_stun_P) +
+  labs(title = "Differential taxa in test conditions",
+       subtitle = "STUNTED Pastoralist samples (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 10),
+        axis.title = element_text(size = 8, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(size = 8),
+        plot.subtitle = element_text(size = 8, face = "bold.italic", colour = "grey"),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)) +
+  scale_fill_manual(values = not_stun_test_colours)
+
+test_lefse_plot_stun_P
+```
+
+```{r, P non stunted lefse}
+test_lefse_not_stun_P <- run_lefse(physeq_test_not_stun_P_rel,
+                           wilcoxon_cutoff = 0.05,
+                           group = "Test",
+                           taxa_rank = "Genus",
+                           kw_cutoff = 0.05,
+                           multigrp_strat = FALSE,
+                           lda_cutoff = 2)
+
+test_lefse_plot_not_stun_P <- plot_ef_bar(test_lefse_not_stun_P) +
+  labs(title = "Differential taxa in test conditions",
+       subtitle = "NON-STUNTED Pastoralist samples (LEfSe)",
+       x = "LDA Score (log<sub>10</sub>)",
+       y = "Genus") +
+  theme_linedraw() +
+  theme(plot.title = element_text(face = "bold", size = 10),
+        axis.title = element_text(size = 8, face = "bold"),
+        axis.text = element_text(size = 8, face = "italic"),
+        axis.title.x = element_markdown(size = 8),
+        plot.subtitle = element_text(size = 8, face = "bold.italic", colour = "grey"),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)) +
+  scale_fill_manual(values = not_stun_test_colours)
+
+test_lefse_plot_not_stun_P
+```
+
+
+```{r, wilcox starch (all)}
+# Subset phyloseq to Stability and Starch samples only
+physeq_test_starch <- subset_samples(physeq_test, Test %in% c("Stability", "Starch"))
+physeq_test_starch <- prune_taxa(taxa_sums(physeq_test_starch) > 0, physeq_test_starch)  # Remove zero taxa
+
+# Agglomerate phyloseq to Family level
+physeq_family <- tax_glom(physeq_test_starch_rel, taxrank = "Family")
+
+# Convert counts to relative abundances
+physeq_test_starch_rel <- transform_sample_counts(physeq_test_starch, function(x) x / sum(x))
+
+# Extract OTU table and sample info
+otu <- as.data.frame(otu_table(physeq_test_starch_rel))
+if (!taxa_are_rows(physeq_test_starch_rel)) {
+  otu <- t(otu)
+}
+
+sample_info <- as.data.frame(sample_data(physeq_test_starch_rel))
+test_groups <- sample_info$Test
+names(test_groups) <- rownames(sample_info)
+
+# Wilcoxon test for each taxon comparing Stability vs Starch
+wilcox_results <- apply(otu, 1, function(abund) {
+  group_stability <- abund[test_groups == "Stability"]
+  group_starch <- abund[test_groups == "Starch"]
+  
+  if (length(group_stability) >= 2 && length(group_starch) >= 2 &&
+      (sd(group_stability) > 0 || sd(group_starch) > 0)) {
+    wilcox.test(group_stability, group_starch)$p.value
+  } else {
+    NA
+  }
+})
+
+# Make results dataframe
+results_df <- tibble(
+  Taxon = names(wilcox_results),
+  p_value = wilcox_results
+) %>%
+  mutate(p_adj = p.adjust(p_value, method = "BH"))
+
+# Add taxonomy info (optional)
+tax_df <- as.data.frame(tax_table(physeq_test_starch_rel)) %>%
+  rownames_to_column(var = "Taxon")
+
+results_df <- left_join(results_df, tax_df, by = "Taxon")
+
+signif_starch_all <- results_df %>%
+  filter(p_adj < 0.05)
+signif_starch_all
+```
+
+
+```{r, wilcox starch (family)}
+# Subset phyloseq to Stability and Starch samples only
+physeq_test_starch <- subset_samples(physeq_test, Test %in% c("Stability", "Starch"))
+physeq_test_starch <- prune_taxa(taxa_sums(physeq_test_starch) > 0, physeq_test_starch)  # Remove zero taxa
+
+# Convert counts to relative abundances first
+physeq_test_starch_rel <- transform_sample_counts(physeq_test_starch, function(x) x / sum(x))
+
+# Agglomerate phyloseq to Family level after relative abundance transform
+physeq_family <- tax_glom(physeq_test_starch_rel, taxrank = "Family")
+
+# Extract OTU table (family-level)
+otu_family <- as.data.frame(otu_table(physeq_family))
+if (!taxa_are_rows(physeq_family)) {
+  otu_family <- t(otu_family)
+}
+
+# Sample group info
+sample_info <- as.data.frame(sample_data(physeq_family))
+test_groups <- sample_info$Test
+names(test_groups) <- rownames(sample_info)
+
+# Wilcoxon test for each family comparing Stability vs Starch
+wilcox_family_results <- apply(otu_family, 1, function(abund) {
+  group_stability <- abund[test_groups == "Stability"]
+  group_starch <- abund[test_groups == "Starch"]
+  
+  if (length(group_stability) >= 2 && length(group_starch) >= 2 &&
+      (sd(group_stability) > 0 || sd(group_starch) > 0)) {
+    wilcox.test(group_stability, group_starch)$p.value
+  } else {
+    NA
+  }
+})
+
+# Format results
+results_family_df <- tibble(
+  Family = names(wilcox_family_results),
+  p_value = wilcox_family_results
+) %>%
+  mutate(p_adj = p.adjust(p_value, method = "BH"))
+
+# Add taxonomy info
+tax_family_df <- as.data.frame(tax_table(physeq_family)) %>%
+  rownames_to_column(var = "TaxonID")
+
+results_family_df_starch <- left_join(results_family_df, tax_family_df, by = c("Family" = "TaxonID"))
+signif_starch <- results_family_df_starch %>%
+  filter(p_adj < 0.05)
+
+signif_starch
+```
+
+
+```{r, GENUS (AP)}
+# top 20 genilies
+genus_abundance_AP <- psmelt(physeq_test_AP_rel) %>%
+  group_by(Genus) %>%
+  summarize(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+top20_genus <- genus_abundance_AP$Genus
+
+# custom genus colours
+custom_gen_colours <- c(
+  Enterococcus = "lightskyblue",
+  "Escherichia-Shigella" = "lightgoldenrod2",
+  Bacteroides = "tan",
+  Clostridium = "mediumpurple1",
+  Paraclostridium = "powderblue",
+  Streptococcus = "firebrick",
+  Lactococcus = "lightgreen",
+  Dorea = "olivedrab",
+  Romboutsia = "lightpink",
+  "Lachnospiraceae UCG-004" = "lemonchiffon2",
+  Lachnoclostridium = "lightsalmon",
+  Flavonifractor = "salmon",
+  Intestinimonas = "plum1",
+  "Ruminococcaceae_Unassigned" = "darkorchid4",
+  Blautia = "steelblue",
+  Morganella = "gray57",
+  Terrisporobacter = "palevioletred1",
+  Hungatella = "khaki4",
+  Parabacteroides = "darkorange1",
+  Barnesiella = "goldenrod1",
+  Collinsella = "forestgreen",
+  Fusobacterium = "sienna",
+  Peptostreptococcus = "thistle4",
+  Peptoniphilus = "royalblue3",
+  "UCG-002" = "purple",
+  Senegalimassilia = "tomato")
+
+# override colours for top20 gens
+genus_colours[names(custom_gen_colours)] <- custom_gen_colours
+
+# Check length (should still be 113)
+length(genus_colours)
+
+colours_gen <- tibble(Genus = all_genera,
+                      Colours = genus_colours)
+
+gen_legend <- scale_fill_manual(values = genus_colours,
+                                     breaks = top20_genus)
+```
+
+```{r, GENUS (AP)}
+#agglomerate to genus level
+physeq_AP_gen <- tax_glom(physeq_test_AP_rel, taxrank = "Genus")
+
+AP_gen_bar <- plot_bar(physeq_AP_gen, fill = "Genus") +
+  geom_bar(stat = "identity", position = "stack", color = NA) +
+  gen_legend +
+  theme_linedraw() + 
+    theme(axis.text.x = element_markdown(angle = 45, hjust = 1, size = 6), 
+    legend.position = "right",         
+    legend.direction = "vertical",     
+    legend.text = element_text(size = 8, face = "italic"), 
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.key.size = unit(1, "lines"),
+    plot.title = element_text(size = 12, face = "bold")) +
+  ggtitle("Relative abundance in Agro-Pastoralist samples: Genus") +
+  ylab("Relative abundance") +
+  guides(fill = guide_legend(ncol = 1, title = "Top 20 Families")) + 
+  facet_wrap(~stunting, scales = "free_x") +
+  scale_x_discrete(labels = function(x) {
+  x <- gsub("_s$", "_starch", x)
+  x <- gsub("_i$", "_inulin", x)
+  x <- gsub("_m$", "_MIX", x)
+  ifelse(x %in% SICs, paste0("**", x, "**"), x)}) 
+
+
+AP_gen_bar
+```
+
+```{r, GENUS (P)}
+# top 20 genilies
+genus_abundance_P <- psmelt(physeq_test_P_rel) %>%
+  group_by(Genus) %>%
+  summarize(total_abundance = sum(Abundance)) %>%
+  arrange(desc(total_abundance)) %>%
+  head(20)
+
+top20_genus_P <- genus_abundance_P$Genus
+
+gen_legend_P <- scale_fill_manual(values = genus_colours,
+                                     breaks = top20_genus_P)
+
+#agglomerate to genus level
+physeq_P_gen <- tax_glom(physeq_test_P_rel, taxrank = "Genus")
+
+P_gen_bar <- plot_bar(physeq_P_gen, fill = "Genus") +
+  gen_legend_P +
+  theme_linedraw() + 
+    theme(axis.text.x = element_markdown(angle = 45, hjust = 1, size = 8), 
+    legend.position = "right",         
+    legend.direction = "vertical",     
+    legend.text = element_text(size = 8, face = "italic"), 
+    legend.title = element_text(size = 10, face = "bold"),
+    legend.key.size = unit(1, "lines"),
+    plot.title = element_text(size = 12, face = "bold")) +
+  ggtitle("Relative abundance in Pastoralist samples: Genus") +
+  ylab("Relative abundance") +
+  guides(fill = guide_legend(ncol = 1, title = "Top 20 Families")) + 
+  facet_wrap(~stunting, scales = "free_x") +
+  scale_x_discrete(labels = function(x) {ifelse(x %in% SICs,
+           paste0("**", x, "**"), x)}) +
+  geom_bar(stat = "identity", position = "stack", color = NA)
+
+P_gen_bar
+```
+
+## alpha-diversity
+change group and stunting in the sample_data of physeq_test to have distinct test groups
+```{r, a-div phyloseqs}
+# subset for easier handling - AP
+physeq_test_distinct_AP <- subset_samples(physeq_test, group =="Agro-Pastoralist")
+physeq_test_distinct_AP_fam <- tax_glom(physeq_test_distinct_AP, taxrank = "Family")
+
+# subset for easier handling - P
+physeq_test_distinct_P <- subset_samples(physeq_test, group =="Pastoralist")
+physeq_test_distinct_P_fam <- tax_glom(physeq_test_distinct_P, taxrank = "Family")
+
+# subset for easier handling - stunted
+physeq_test_distinct_stun <- subset_samples(physeq_test, stunting =="Stunted")
+physeq_test_distinct_stun_fam <- tax_glom(physeq_test_distinct_stun, taxrank = "Family")
+# subset for easier handling - not stunted
+physeq_test_distinct_not_stun <- subset_samples(physeq_test, stunting =="Not Stunted")
+physeq_test_distinct_not_stun_fam <- tax_glom(physeq_test_distinct_not_stun, taxrank = "Family")
+```
+
+
+
+```{r, a-div AP}
+alpha_div_comm_AP <-  plot_richness(physeq_test_distinct_AP, x= "Test",
+                          measures=c("Observed", "Shannon", "InvSimpson"),
+                          color = "Test") +
+  geom_boxplot(aes(x = Test, y = value, color = Test, fill = Test), alpha = 0.5) +
+  theme_linedraw() +
+  scale_color_manual(values = AP_test_colours) + 
+  scale_fill_manual(values = AP_test_colours) + 
+  theme(axis.text.x.bottom = element_blank(),
+        axis.text=element_text(), 
+        axis.title = element_text(face="bold"),
+        plot.title =element_text(size = 12, face="bold"),
+        plot.subtitle = element_text(colour = "firebrick", face = "bold.italic", size = 10),
+        strip.text.x = element_text(face="bold"),
+        legend.position = "bottom", legend.title = element_blank()) +
+  guides(fill = "none") +
+  labs(title = "Alpha Diversity in Agro-Pastoralist samples",
+       subtitle = "ASV level - by test") +
+  geom_signif(comparisons = list(c("Stability", "Inulin"),
+                                 c("Stability", "Starch"),
+                                 c("Stability", "MIX")),
+              test = "wilcox.test",  # wilcoxon test
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              step_increase = 0.05,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.05,
+              colour = "black") 
+
+
+alpha_div_comm_AP
+```
+
+```{r, a-div P}
+alpha_div_comm_P <-  plot_richness(physeq_test_distinct_P, x= "Test",
+                          measures=c("Observed", "Shannon", "InvSimpson"),
+                          color = "Test") +
+  geom_boxplot(aes(x = Test, y = value, color = Test, fill = Test), alpha = 0.5) +
+  theme_linedraw() +
+  scale_color_manual(values = P_test_colours) + 
+  scale_fill_manual(values = P_test_colours) + 
+  theme(axis.text.x.bottom = element_blank(),
+        axis.text=element_text(), 
+        axis.title = element_text(face="bold"),
+        plot.title =element_text(size = 12, face="bold"),
+        plot.subtitle = element_text(colour = "cornflowerblue", face = "bold.italic", size = 10),
+        strip.text.x = element_text(face="bold"),
+        legend.position = "bottom", legend.title = element_blank()) +
+  guides(fill = "none") +
+  labs(title = "Alpha Diversity in Pastoralist samples",
+       subtitle = "ASV level - by test") +
+  geom_signif(comparisons = list(c("Stability", "Inulin"),
+                                 c("Stability", "Starch"),
+                                 c("Stability", "MIX")),
+              test = "wilcox.test",  # wilcoxon test
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              step_increase = 0.05,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.05,
+              colour = "black") 
+
+
+alpha_div_comm_P
+```
+
+```{r, a-div stunted}
+alpha_div_comm_stun <-  plot_richness(physeq_test_distinct_stun, x= "Test",
+                          measures=c("Observed", "Shannon", "InvSimpson"),
+                          color = "Test") +
+  geom_boxplot(aes(x = Test, y = value, color = Test, fill = Test), alpha = 0.5) +
+  theme_linedraw() +
+  scale_color_manual(values = stun_test_colours) + 
+  scale_fill_manual(values = stun_test_colours) + 
+  theme(axis.text.x.bottom = element_blank(),
+        axis.text=element_text(), 
+        axis.title = element_text(face="bold"),
+        plot.title =element_text(size = 12, face="bold"),
+        plot.subtitle = element_text(colour = "firebrick", face = "bold.italic", size = 10),
+        strip.text.x = element_text(face="bold"),
+        legend.position = "bottom", legend.title = element_blank()) +
+  guides(fill = "none") +
+  labs(title = "Alpha Diversity in stunted samples",
+       subtitle = "ASV level - by test") +
+  geom_signif(comparisons = list(c("Stability", "Inulin"),
+                                 c("Stability", "Starch"),
+                                 c("Stability", "MIX")),
+              test = "wilcox.test",  # wilcoxon test
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              step_increase = 0.05,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.05,
+              colour = "black") 
+
+
+alpha_div_comm_stun
+```
+
+```{r, a-div not stunted}
+alpha_div_comm_not_stun <-  plot_richness(physeq_test_distinct_not_stun, x= "Test",
+                          measures=c("Observed", "Shannon", "InvSimpson"),
+                          color = "Test") +
+  geom_boxplot(aes(x = Test, y = value, color = Test, fill = Test), alpha = 0.5) +
+  theme_linedraw() +
+  scale_color_manual(values = not_stun_test_colours) + 
+  scale_fill_manual(values = not_stun_test_colours) + 
+  theme(axis.text.x.bottom = element_blank(),
+        axis.text=element_text(), 
+        axis.title = element_text(face="bold"),
+        plot.title =element_text(size = 12, face="bold"),
+        plot.subtitle = element_text(colour = "cornflowerblue", face = "bold.italic", size = 10),
+        strip.text.x = element_text(face="bold"),
+        legend.position = "bottom", legend.title = element_blank()) +
+  guides(fill = "none") +
+  labs(title = "Alpha Diversity in non-stunted samples",
+       subtitle = "ASV level - by test") +
+  geom_signif(comparisons = list(c("Stability", "Inulin"),
+                                 c("Stability", "Starch"),
+                                 c("Stability", "MIX")),
+              test = "wilcox.test",  # wilcoxon test
+              test.args = list(exact = FALSE),
+              map_signif_level = TRUE,
+              step_increase = 0.05,
+              tip_length = 0,
+              textsize = 2.75,
+              vjust = -0.05,
+              colour = "black") 
+
+
+alpha_div_comm_not_stun
+```
+
+## beta-diversity
+```{r, new colours}
+new_test_colours <- c("Agro-Pastoralist (Stunted)" = "midnightblue",
+                        "Agro-Pastoralist (Not Stunted)" = "cornflowerblue",
+                        "Pastoralist (Stunted)" = "firebrick",
+                        "Pastoralist (Not Stunted)" = "salmon")
+
+sample_colours <- c(
+  "AP013C1" = "#BC6C29",    # brown-orange
+  "AP017C2" = "#4CD2C3",    # turquoise
+  "AP018C2" = "#807C8A",    # greyish purple
+  "AP022C1" = "#6EFF2C",    # lime green
+  "AP041C1" = "#4D56E4",    # medium blue
+  "AP049C1" = "#A7DFDB",    # light teal
+  "AP052C1" = "#D9CFE0",    # lavender grey
+  "AP055C1" = "#C3F7A8",    # mint green
+  "AP066C2" = "#D2B82C",    # golden yellow
+  "AP111C1" = "#4A65D2",    # steel blue
+  "AP120C1" = "#4ABBE1",    # sky blue
+  "AP125C1" = "#556D4C",    # dark olive green
+  "P017C1"  = "#82FB82",    # light green
+  "P020C1"  = "#443A66",    # dark purple
+  "P032C3"  = "#D5CC6B",    # light khaki
+  "P044C2"  = "#F731C6",    # neon magenta
+  "P052C1"  = "#D88F87",    # salmon pink
+  "P056C1"  = "#7A26E8",    # bright purple
+  "P057C1"  = "#DB91DE",    # orchid pink
+  "P073C2"  = "#DF3F76",    # rose
+  "P075C1"  = "#D9F943",    # lime yellow
+  "P102C2"  = "#E1DABC",    # beige
+  "P103C1"  = "#E13B3B",    # bright red
+  "P111C1"  = "#DDA4D1"     # pale pink
+)
+```
+
+
+```{r, stability & test}
+# agglomerate by family
+#physeq_test_family <- tax_glom(physeq_test, taxrank = "Family")
+physeq_test_family <- physeq_test
+# remove singletons
+physeq_test_pruned <- physeq_test_family
+# How many singletons?
+length(which(taxa_sums(physeq_test_pruned)== 1))
+# 4 singletons
+
+# prune
+physeq_test_pruned = prune_taxa(taxa_sums(physeq_test_pruned)> 1, physeq_test_pruned)
+length(which(taxa_sums(physeq_test_pruned)== 1))
+# 0 singletons
+
+#Log transform
+# add pseudo count due to zero inflated data
+physeq_test_pruned_log <- transform_sample_counts(physeq_test_pruned, function(x) log(1+x))
+
+
+# change sample data to have stunting status after group
+sd <- as.data.frame(sample_data(physeq_test_pruned_log))
+sd$group <- paste0(sd$group, " (", sd$stunting, ")")
+sample_data(physeq_test_pruned_log) <- sample_data(sd)
+
+# to colour by sample
+sample_data(physeq_test_pruned_log)$SampleCore <- gsub("_.*", "", sample_data(physeq_test_pruned_log)$fastqID)
+
+# set colours per sample
+num_samples <- length(mysamples)
+sample_colours <- setNames(distinctColorPalette(num_samples), mysamples)
+
+### Distance
+# Bray-Curtis
+dist.bc <- distance(physeq_test_pruned_log, method = "bray")
+
+# Jaccard
+dist.jac <- distance(physeq_test_pruned_log, method = "jaccard")
+
+### Bray-Curtis
+
+test_PCoAbray <- ordinate(physeq_test_pruned_log, "PCoA", distance = dist.bc)
+
+
+bc_pcoa <- plot_ordination(physeq_test_pruned_log, test_PCoAbray, 
+                                type = "samples", color = "SampleCore", shape = "Test") + 
+  theme_linedraw() +
+  labs(title = "PCoA - ASV level (Bray-Curtis distance)",
+       subtitle = "Stability & Test SICs") +
+  scale_color_manual(values = sample_colours) + 
+  scale_shape_manual(values = c("Inulin" = 17,
+                              "Starch" = 15,
+                              "MIX" = 3,
+                              "Stability" = 1)) +
+  geom_point(aes(color = SampleCore, shape = Test), size = 2, stroke = 1) +
+  guides(color = guide_legend(title = "SampleID"),
+         shape = guide_legend(title = "Test")) + # legend guides
+  theme(plot.title = element_text(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, face = "bold.italic", colour = "forestgreen"))
+bc_pcoa
+```
+
+```{r, test}
+# agglomerate by family
+#physeq_perturbations_family <- tax_glom(physeq_perturbations, taxrank = "Family")
+physeq_perturbations_family <- physeq_perturbations
+# remove singletons
+physeq_perturbations_pruned <- physeq_perturbations_family
+# How many singletons?
+length(which(taxa_sums(physeq_perturbations_pruned)== 1))
+# 0 singletons
+
+#Log transform
+# add pseudo count due to zero inflated data
+physeq_perturbations_pruned_log <- transform_sample_counts(physeq_perturbations_pruned, function(x) log(1+x))
+
+
+# change sample data to have stunting status after group
+sd <- as.data.frame(sample_data(physeq_perturbations_pruned_log))
+sd$group <- paste0(sd$group, " (", sd$stunting, ")")
+sample_data(physeq_perturbations_pruned_log) <- sample_data(sd)
+
+# to colour by sample
+sample_data(physeq_perturbations_pruned_log)$SampleCore <- gsub("_.*", "", sample_data(physeq_perturbations_pruned_log)$fastqID)
+```
+
+### Distance
+```{r}
+# Bray-Curtis
+dist.bc <- distance(physeq_perturbations_pruned_log, method = "bray")
+
+# Jaccard
+dist.jac <- distance(physeq_perturbations_pruned_log, method = "jaccard")
+```
+
+### Bray-Curtis
+```{r}
+test_PCoAbray <- ordinate(physeq_perturbations_pruned_log, "PCoA", distance = dist.bc)
+
+
+bc_pcoa_perturbations <- plot_ordination(physeq_perturbations_pruned_log, test_PCoAbray, 
+                                type = "samples", color = "SampleCore", shape = "Test") + 
+  theme_linedraw() +
+  labs(title = "PCoA (Bray-Curtis distance)",
+       subtitle = "Test SICs") +
+  scale_color_manual(values = sample_colours) + 
+  scale_shape_manual(values = c("Inulin" = 17,
+                              "Starch" = 15,
+                              "MIX" = 3)) +
+  geom_point(aes(color = SampleCore, shape = Test), size = 2, stroke = 0.5) +
+  guides(color = guide_legend(title = "SampleID"),
+         shape = guide_legend(title = "Test")) + # legend guides
+  theme(plot.title = element_text(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, face = "bold.italic", colour = "goldenrod"))
+bc_pcoa_perturbations
+
+#test_NMDSbray <- ordinate(physeq_pruned_log, "NMDS", "bray")
+```
+
+```{r, test - stability x starch}
+# filter physeq_test_family that's already agglomerated by family
+sample_data(physeq_test_family)$SampleCore <- gsub("_.*", "", sample_data(physeq_test_family)$fastqID)
+physeq_starch <- subset_samples(physeq_test_family, Test %in% c("Stability", "Starch"))
+
+# remove singletons
+physeq_starch_pruned <- physeq_starch
+# How many singletons?
+length(which(taxa_sums(physeq_starch_pruned)== 1))
+# 0 singletons
+
+#Log transform
+# add pseudo count due to zero inflated data
+physeq_starch_pruned_log <- transform_sample_counts(physeq_starch_pruned, function(x) log(1+x))
+
+
+# change sample data to have stunting status after group
+sd <- as.data.frame(sample_data(physeq_starch_pruned_log))
+sd$group <- paste0(sd$group, " (", sd$stunting, ")")
+sample_data(physeq_starch_pruned_log) <- sample_data(sd)
+
+#distances
+# Bray-Curtis
+dist.bc <- distance(physeq_starch_pruned_log, method = "bray")
+
+# Jaccard
+dist.jac <- distance(physeq_starch_pruned_log, method = "jaccard")
+
+#BC plot
+test_PCoAbray <- ordinate(physeq_starch_pruned_log, "PCoA", distance = dist.bc)
+
+
+bc_pcoa_starch <- plot_ordination(physeq_starch_pruned_log, test_PCoAbray, 
+                                type = "samples", color = "SampleCore", shape = "Test") + 
+  theme_linedraw() +
+  labs(title = "PCoA - ASV level (Bray-Curtis distance)",
+       subtitle = "Stability vs Starch") +
+  scale_color_manual(values = sample_colours) + 
+  scale_shape_manual(values = c("Stability" = 1,
+                              "Starch" = 15)) +
+  geom_point(aes(color = SampleCore, shape = Test), size = 2, stroke = 1) +
+  guides(color = guide_legend(title = "SampleID"),
+         shape = guide_legend(title = "Test")) + # legend guides
+  theme(plot.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 8, face = "bold.italic", colour = "goldenrod"),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8))
+bc_pcoa_starch
+```
+
+```{r, test - stability x inulin}
+# filter physeq_test_family that's already agglomerated by family
+physeq_inulin <- subset_samples(physeq_test_family, Test %in% c("Stability", "Inulin"))
+
+# remove singletons
+physeq_inulin_pruned <- physeq_inulin
+# How many singletons?
+length(which(taxa_sums(physeq_inulin_pruned)== 1))
+# 0 singletons
+
+#Log transform
+# add pseudo count due to zero inflated data
+physeq_inulin_pruned_log <- transform_sample_counts(physeq_inulin_pruned, function(x) log(1+x))
+
+
+# change sample data to have stunting status after group
+sd <- as.data.frame(sample_data(physeq_inulin_pruned_log))
+sd$group <- paste0(sd$group, " (", sd$stunting, ")")
+sample_data(physeq_inulin_pruned_log) <- sample_data(sd)
+
+# Bray-Curtis
+dist.bc <- distance(physeq_inulin_pruned_log, method = "bray")
+
+# Jaccard
+dist.jac <- distance(physeq_inulin_pruned_log, method = "jaccard")
+
+test_PCoAbray <- ordinate(physeq_inulin_pruned_log, "PCoA", distance = dist.bc)
+
+
+bc_pcoa_inulin <- plot_ordination(physeq_inulin_pruned_log, test_PCoAbray, 
+                                type = "samples", color = "SampleCore", shape = "Test") + 
+  theme_linedraw() +
+  labs(title = "PCoA - ASV level (Bray-Curtis distance)",
+       subtitle = "Stability vs Inulin") +
+  scale_color_manual(values = sample_colours) + 
+  scale_shape_manual(values = c("Stability" = 1,
+                              "Inulin" = 17)) +
+  geom_point(aes(color = SampleCore, shape = Test), size = 2, stroke = 1) +
+  guides(color = guide_legend(title = "SampleID"),
+         shape = guide_legend(title = "Test")) + # legend guides
+  theme(plot.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 8, face = "bold.italic", colour = "cornflowerblue"),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8))
+bc_pcoa_inulin
+```
+```{r, test - stability x MIX}
+# filter physeq_test_family that's already agglomerated by family
+physeq_MIX <- subset_samples(physeq_test_family, Test %in% c("Stability", "MIX"))
+
+# remove singletons
+physeq_MIX_pruned <- physeq_MIX
+# How many singletons?
+length(which(taxa_sums(physeq_MIX_pruned)== 1))
+# 0 singletons
+
+#Log transform
+# add pseudo count due to zero inflated data
+physeq_MIX_pruned_log <- transform_sample_counts(physeq_MIX_pruned, function(x) log(1+x))
+
+
+# change sample data to have stunting status after group
+sd <- as.data.frame(sample_data(physeq_MIX_pruned_log))
+sd$group <- paste0(sd$group, " (", sd$stunting, ")")
+sample_data(physeq_MIX_pruned_log) <- sample_data(sd)
+
+
+# Bray-Curtis
+dist.bc <- distance(physeq_MIX_pruned_log, method = "bray")
+
+# Jaccard
+dist.jac <- distance(physeq_MIX_pruned_log, method = "jaccard")
+
+
+test_PCoAbray <- ordinate(physeq_MIX_pruned_log, "PCoA", distance = dist.bc)
+
+
+bc_pcoa_MIX <- plot_ordination(physeq_MIX_pruned_log, test_PCoAbray, 
+                                type = "samples", color = "SampleCore", shape = "Test") + 
+  theme_linedraw() +
+  labs(title = "PCoA - ASV level (Bray-Curtis distance)",
+       subtitle = "Stability vs MIX") +
+  scale_color_manual(values = sample_colours) + 
+  scale_shape_manual(values = c("Stability" = 1,
+                              "MIX" = 3)) +
+  geom_point(aes(color = SampleCore, shape = Test), size = 2, stroke = 1) +
+  guides(color = guide_legend(title = "SampleID"),
+         shape = guide_legend(title = "Test")) + # legend guides
+  theme(plot.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 8, face = "bold.italic", colour = "firebrick"),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8))
+bc_pcoa_MIX
+```
+
+### Arrow plot - SICs (by test)
+```{r, starch}
+library(ggrepel)
+# Agglomerate phyloseq at Family
+physeq_arrow_starch <- tax_glom(physeq_starch, "Family")
+#physeq_arrow_starch <- physeq_starch
+
+# change sample data to have stunting status after group
+sd <- as.data.frame(sample_data(physeq_arrow_starch))
+sd$group <- paste0(sd$group, " (", sd$stunting, ")")
+sample_data(physeq_arrow_starch) <- sample_data(sd)
+  
+physeq_arrow_starch #  112 taxa and 142 samples - 2x stability tests are missing!!
+
+# OTU table 
+OTU_arr = as(otu_table(physeq_arrow_starch), "matrix")
+otu_arr <- as.data.frame(OTU_arr)
+# Tax table
+TAX_arr = as(tax_table(physeq_arrow_starch), "matrix")
+tax_arr <- as.data.frame(TAX_arr)
+# Metadata table
+META_arr = as(sample_data(physeq_arrow_starch), "matrix")
+meta_arr <- as.data.frame(META_arr)
+
+# Binding otu and tax table
+tax_otu <-cbind(tax_arr, otu_arr)
+
+# Remove columns unused for the names
+tax_otu <-tax_otu[, -(1:4)]
+tax_otu <-tax_otu[, -(2:3)]
+
+# Combine Genus and Species names
+#tax_otu$Name <- str_c(tax_otu$Genus, '_', tax_otu$Species)
+# Change number as it corresponds to the last column of the dataframe
+tax_otu[, 1]<-as.character(tax_otu[, 1])
+length(unique(tax_otu[,1])) # 456 unique families
+# If not unique names:
+tax_otu[, 1]<-make.unique(tax_otu[, 1]) # Now still 2684 unique genera
+
+# Assign rownames as familiy names
+tax_otu <- tax_otu[!is.na(tax_otu[,1]), ]
+rownames(tax_otu) <- tax_otu[,1]
+# remove columns with names
+tax_otu <-tax_otu[, -1]
+
+tax_otu <- t(tax_otu)
+class(tax_otu) <- "numeric"
+tax_otu <- as.data.frame(tax_otu)
+
+# No NAs in the dataset
+length(which(is.na(tax_otu)==TRUE))
+#if NA:
+#tax_otu[is.na(tax_otu)] <- 0 #convert NAs to zeros
+
+## PCoA
+    # First step is to calculate a distance matrix. 
+    # Here we use Bray-Curtis distance metric
+# Log transform
+tax_otu_log <-transform(tax_otu[, 1:112], 'log10')
+
+# distance matrix
+dist <- vegdist(tax_otu_log[, 1:112],  method = "bray")
+PCOA <- pcoa(dist)
+
+# Save vectors axis 1 and 2 values from the PCoA, rows are samples
+vectorPCOA <- cbind(PCOA$vectors[, 1:2])
+
+# Include species level Abundances in Ordination 
+# Fits an environmental vector or factor onto an ordination
+env.fit <- envfit(vectorPCOA, tax_otu_log[,1:112], perm = 999)
+## This step might not work on our personal laptop
+# If so, run it on the computer in Youzheng and Simon's office
+
+# Contain fitted score for each species (axis 1 and 2)
+env.fit.sig  <- as.data.frame(scores(env.fit, display = "vectors"))
+
+# Extracting significant pvalues from envfit taxa
+ls_vec <- as.list(env.fit$vectors)
+
+# Creating p.values dataframe
+pvals <- as.data.frame(ls_vec$pvals)
+
+# Arrows coordinate
+arrows<-as.data.frame(ls_vec$arrows*sqrt(ls_vec$r))
+
+# Combined coordinate and pvalues
+arr_pvals <- cbind(arrows, pvals)
+
+# Save table
+#write.table(arr_pvals,"Envfit_arrowsAxis_pVal.txt",sep="\t",row.names=FALSE)
+
+# Subset: select pval <= 0.001 to select significant genus
+arr_pvals_red <- subset(arr_pvals, pvals<=0.05)
+arr_pvals_red <- cbind(arr_pvals_red, family = rownames(arr_pvals_red))
+
+## Format taxa scores for plotting
+df_envfit <- scores(env.fit,display=c("vectors"))
+df_envfit <- df_envfit*vegan:::ordiArrowMul(df_envfit)
+df_envfit <- as.data.frame(df_envfit)
+df_envfit$family <- rownames(df_envfit)
+df_envfit <- df_envfit %>% filter(family %in% arr_pvals_red$family)
+
+## Get PCOA scores of axis 1 and 2 for each sample
+# Use the score returned by the PCoA
+ft.scores <- as.data.frame(vectorPCOA)
+ft.scores$fastqID <- rownames(tax_otu)
+
+# Verify same number of samples
+which(rownames(meta_arr) != rownames(ft.scores))
+
+# Paste metadata to PCoA scores for plotting
+ft.scores$Test <- meta_arr$Test
+ft.scores$group <- meta_arr$group
+
+# Get distinct rows
+ft.scores.d <- distinct(ft.scores)
+# add sample colours
+ft.scores.d$SampleCore <- gsub("_.*", "", ft.scores.d$fastqID)
+
+# ft.score.d contain sample PCoA scores for axis 1 and 2
+# df.envfit contain species score for axis 1 and 2
+
+## Plot ordination with arrows
+SIC_arrow_starch <- ggplot() +
+  geom_point(aes(ft.scores.d$Axis.1,ft.scores.d$Axis.2,
+                   colour =ft.scores.d$SampleCore, shape = ft.scores.d$Test), size = 2, stroke = 1) + 
+  theme_linedraw() +
+  scale_shape_manual(values = c("Stability" = 1, "Starch" = 15)) + 
+  scale_color_manual(values = sample_colours) +
+  geom_segment(aes(x = 0, y = 0, xend = df_envfit$Axis.1*0.5,
+                   yend = df_envfit$Axis.2*0.5),
+               arrow = arrow(length = unit(0.2, "cm")),
+               color="#808080",alpha=0.5) +
+geom_text_repel(data = df_envfit, 
+          aes(x = Axis.1*0.52, y = Axis.2*0.52, label = family),
+          color = "black", alpha = 0.5, size = 3, fontface = "bold.italic") +# can adjust overlap settings with geom_text_repel and max.overlaps
+  ggtitle("Families driving clustering using BrayCurtis distance and PCoA") +
+  xlab("Axis 1") +
+  ylab("Axis 2") +
+  labs(colour = "SampleID", shape = "Test",
+       subtitle = "Stability & Starch") +
+  theme(plot.title = element_text(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, face = "bold.italic", colour = "goldenrod")) #take off if I want legend
+
+SIC_arrow_starch
+```
+
+```{r, inulin}
+# Agglomerate phyloseq at Family
+physeq_arrow_inulin <- tax_glom(physeq_inulin, "Family")
+
+# change sample data to have stunting status after group
+sd <- as.data.frame(sample_data(physeq_arrow_inulin))
+sd$group <- paste0(sd$group, " (", sd$stunting, ")")
+sample_data(physeq_arrow_inulin) <- sample_data(sd)
+  
+physeq_arrow_inulin #  112 taxa and 142 samples - 2x stability tests are missing!!
+
+# OTU table 
+OTU_arr = as(otu_table(physeq_arrow_inulin), "matrix")
+otu_arr <- as.data.frame(OTU_arr)
+# Tax table
+TAX_arr = as(tax_table(physeq_arrow_inulin), "matrix")
+tax_arr <- as.data.frame(TAX_arr)
+# Metadata table
+META_arr = as(sample_data(physeq_arrow_inulin), "matrix")
+meta_arr <- as.data.frame(META_arr)
+
+# Binding otu and tax table
+tax_otu <-cbind(tax_arr, otu_arr)
+
+# Remove columns unused for the names
+tax_otu <-tax_otu[, -(1:4)]
+tax_otu <-tax_otu[, -(2:3)]
+
+# Combine Genus and Species names
+#tax_otu$Name <- str_c(tax_otu$Genus, '_', tax_otu$Species)
+# Change number as it corresponds to the last column of the dataframe
+tax_otu[, 1]<-as.character(tax_otu[, 1])
+length(unique(tax_otu[,1])) # 112 unique families
+# If not unique names:
+tax_otu[, 1]<-make.unique(tax_otu[, 1]) # Now still 112 unique genera
+
+# Assign rownames as familiy names
+rownames(tax_otu) <- tax_otu[,1]
+# remove columns with names
+tax_otu <-tax_otu[, -1]
+
+tax_otu <- t(tax_otu)
+class(tax_otu) <- "numeric"
+tax_otu <- as.data.frame(tax_otu)
+
+# No NAs in the dataset
+length(which(is.na(tax_otu)==TRUE))
+#if NA:
+#tax_otu[is.na(tax_otu)] <- 0 #convert NAs to zeros
+
+## PCoA
+    # First step is to calculate a distance matrix. 
+    # Here we use Bray-Curtis distance metric
+# Log transform
+tax_otu_log <-transform(tax_otu[, 1:112], 'log10')
+
+# distance matrix
+dist <- vegdist(tax_otu_log[, 1:112],  method = "bray")
+PCOA <- pcoa(dist)
+
+# Save vectors axis 1 and 2 values from the PCoA, rows are samples
+vectorPCOA <- cbind(PCOA$vectors[, 1:2])
+
+# Include species level Abundances in Ordination 
+# Fits an environmental vector or factor onto an ordination
+env.fit <- envfit(vectorPCOA, tax_otu_log[,1:112], perm = 999)
+## This step might not work on our personal laptop
+# If so, run it on the computer in Youzheng and Simon's office
+
+# Contain fitted score for each species (axis 1 and 2)
+env.fit.sig  <- as.data.frame(scores(env.fit, display = "vectors"))
+
+# Extracting significant pvalues from envfit taxa
+ls_vec <- as.list(env.fit$vectors)
+
+# Creating p.values dataframe
+pvals <- as.data.frame(ls_vec$pvals)
+
+# Arrows coordinate
+arrows<-as.data.frame(ls_vec$arrows*sqrt(ls_vec$r))
+
+# Combined coordinate and pvalues
+arr_pvals <- cbind(arrows, pvals)
+
+# Save table
+#write.table(arr_pvals,"Envfit_arrowsAxis_pVal.txt",sep="\t",row.names=FALSE)
+
+# Subset: select pval <= 0.001 to select significant genus
+arr_pvals_red <- subset(arr_pvals, pvals<=0.05)
+arr_pvals_red <- cbind(arr_pvals_red, family = rownames(arr_pvals_red))
+
+## Format taxa scores for plotting
+df_envfit <- scores(env.fit,display=c("vectors"))
+df_envfit <- df_envfit*vegan:::ordiArrowMul(df_envfit)
+df_envfit <- as.data.frame(df_envfit)
+df_envfit$family <- rownames(df_envfit)
+df_envfit <- df_envfit %>% filter(family %in% arr_pvals_red$family)
+
+## Get PCOA scores of axis 1 and 2 for each sample
+# Use the score returned by the PCoA
+ft.scores <- as.data.frame(vectorPCOA)
+ft.scores$fastqID <- rownames(tax_otu)
+
+# Verify same number of samples
+which(rownames(meta_arr) != rownames(ft.scores))
+
+# Paste metadata to PCoA scores for plotting
+ft.scores$Test <- meta_arr$Test
+ft.scores$group <- meta_arr$group
+
+# Get distinct rows
+ft.scores.d <- distinct(ft.scores)
+# add sample colours
+ft.scores.d$SampleCore <- gsub("_.*", "", ft.scores.d$fastqID)
+
+# ft.score.d contain sample PCoA scores for axis 1 and 2
+# df.envfit contain species score for axis 1 and 2
+
+## Plot ordination with arrows
+SIC_arrow_inulin <- ggplot() +
+  geom_point(aes(ft.scores.d$Axis.1,ft.scores.d$Axis.2,
+                   colour =ft.scores.d$SampleCore, shape = ft.scores.d$Test), size = 2, stroke = 1) + 
+  theme_linedraw() +
+  scale_shape_manual(values = c("Stability" = 1, "Inulin" = 17)) + 
+  scale_color_manual(values = sample_colours) +
+  geom_segment(aes(x = 0, y = 0, xend = df_envfit$Axis.1*0.5,
+                   yend = df_envfit$Axis.2*0.5),
+               arrow = arrow(length = unit(0.2, "cm")),
+               color="#808080",alpha=0.5) +
+geom_text_repel(data = df_envfit, 
+          aes(x = Axis.1*0.52, y = Axis.2*0.52, label = family),
+          color = "black", alpha = 0.5, size = 3, fontface = "bold.italic") +# can adjust overlap settings with geom_text_repel and max.overlaps
+  ggtitle("Families driving clustering using BrayCurtis distance and PCoA") +
+  xlab("Axis 1") +
+  ylab("Axis 2") +
+  labs(colour = "SampleID", shape = "Test",
+       subtitle = "Stability & Inulin") +
+  theme(plot.title = element_text(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, face = "bold.italic", colour = "cornflowerblue")) #take off if I want legend
+
+SIC_arrow_inulin
+```
+
+```{r, MIX}
+# Agglomerate phyloseq at Family
+physeq_arrow_MIX <- tax_glom(physeq_MIX, "Family")
+
+# change sample data to have stunting status after group
+sd <- as.data.frame(sample_data(physeq_arrow_MIX))
+sd$group <- paste0(sd$group, " (", sd$stunting, ")")
+sample_data(physeq_arrow_MIX) <- sample_data(sd)
+  
+physeq_arrow_MIX #  112 taxa and 142 samples - 2x stability tests are missing!!
+
+# OTU table 
+OTU_arr = as(otu_table(physeq_arrow_MIX), "matrix")
+otu_arr <- as.data.frame(OTU_arr)
+# Tax table
+TAX_arr = as(tax_table(physeq_arrow_MIX), "matrix")
+tax_arr <- as.data.frame(TAX_arr)
+# Metadata table
+META_arr = as(sample_data(physeq_arrow_MIX), "matrix")
+meta_arr <- as.data.frame(META_arr)
+
+# Binding otu and tax table
+tax_otu <-cbind(tax_arr, otu_arr)
+
+# Remove columns unused for the names
+tax_otu <-tax_otu[, -(1:4)]
+tax_otu <-tax_otu[, -(2:3)]
+
+# Combine Genus and Species names
+#tax_otu$Name <- str_c(tax_otu$Genus, '_', tax_otu$Species)
+# Change number as it corresponds to the last column of the dataframe
+tax_otu[, 1]<-as.character(tax_otu[, 1])
+length(unique(tax_otu[,1])) # 112 unique families
+# If not unique names:
+tax_otu[, 1]<-make.unique(tax_otu[, 1]) # Now still 112 unique genera
+
+# Assign rownames as familiy names
+rownames(tax_otu) <- tax_otu[,1]
+# remove columns with names
+tax_otu <-tax_otu[, -1]
+
+tax_otu <- t(tax_otu)
+class(tax_otu) <- "numeric"
+tax_otu <- as.data.frame(tax_otu)
+
+# No NAs in the dataset
+length(which(is.na(tax_otu)==TRUE))
+#if NA:
+#tax_otu[is.na(tax_otu)] <- 0 #convert NAs to zeros
+
+## PCoA
+    # First step is to calculate a distance matrix. 
+    # Here we use Bray-Curtis distance metric
+# Log transform
+tax_otu_log <-transform(tax_otu[, 1:112], 'log10')
+
+# distance matrix
+dist <- vegdist(tax_otu_log[, 1:112],  method = "bray")
+PCOA <- pcoa(dist)
+
+# Save vectors axis 1 and 2 values from the PCoA, rows are samples
+vectorPCOA <- cbind(PCOA$vectors[, 1:2])
+
+# Include species level Abundances in Ordination 
+# Fits an environmental vector or factor onto an ordination
+env.fit <- envfit(vectorPCOA, tax_otu_log[,1:112], perm = 999)
+## This step might not work on our personal laptop
+# If so, run it on the computer in Youzheng and Simon's office
+
+# Contain fitted score for each species (axis 1 and 2)
+env.fit.sig  <- as.data.frame(scores(env.fit, display = "vectors"))
+
+# Extracting significant pvalues from envfit taxa
+ls_vec <- as.list(env.fit$vectors) #### r2 values here!!
+
+# Creating p.values dataframe
+pvals <- as.data.frame(ls_vec$pvals)
+
+# Arrows coordinate
+arrows<-as.data.frame(ls_vec$arrows*sqrt(ls_vec$r))
+
+# Combined coordinate and pvalues
+arr_pvals <- cbind(arrows, pvals)
+
+# Save table
+#write.table(arr_pvals,"Envfit_arrowsAxis_pVal.txt",sep="\t",row.names=FALSE)
+
+# Subset: select pval <= 0.001 to select significant genus
+arr_pvals_red <- subset(arr_pvals, pvals<=0.05)
+arr_pvals_red <- cbind(arr_pvals_red, family = rownames(arr_pvals_red))
+
+## Format taxa scores for plotting
+df_envfit <- scores(env.fit,display=c("vectors"))
+df_envfit <- df_envfit*vegan:::ordiArrowMul(df_envfit)
+df_envfit <- as.data.frame(df_envfit)
+df_envfit$family <- rownames(df_envfit)
+df_envfit <- df_envfit %>% filter(family %in% arr_pvals_red$family)
+
+## Get PCOA scores of axis 1 and 2 for each sample
+# Use the score returned by the PCoA
+ft.scores <- as.data.frame(vectorPCOA)
+ft.scores$fastqID <- rownames(tax_otu)
+
+# Verify same number of samples
+which(rownames(meta_arr) != rownames(ft.scores))
+
+# Paste metadata to PCoA scores for plotting
+ft.scores$Test <- meta_arr$Test
+ft.scores$group <- meta_arr$group
+
+# Get distinct rows
+ft.scores.d <- distinct(ft.scores)
+# add sample colours
+ft.scores.d$SampleCore <- gsub("_.*", "", ft.scores.d$fastqID)
+
+# ft.score.d contain sample PCoA scores for axis 1 and 2
+# df.envfit contain species score for axis 1 and 2
+
+## Plot ordination with arrows
+SIC_arrow_MIX <- ggplot() +
+  geom_point(aes(ft.scores.d$Axis.1,ft.scores.d$Axis.2,
+                   colour =ft.scores.d$SampleCore, shape = ft.scores.d$Test), size = 2, stroke = 1) + 
+  theme_linedraw() +
+  scale_shape_manual(values = c("Stability" = 1, "MIX" = 3)) + 
+  scale_color_manual(values = sample_colours) +
+  geom_segment(aes(x = 0, y = 0, xend = df_envfit$Axis.1*0.5,
+                   yend = df_envfit$Axis.2*0.5),
+               arrow = arrow(length = unit(0.2, "cm")),
+               color="#808080",alpha=0.5) +
+geom_text_repel(data = df_envfit, 
+          aes(x = Axis.1*0.52, y = Axis.2*0.52, label = family),
+          color = "black", alpha = 0.5, size = 3, fontface = "bold.italic") +# can adjust overlap settings with geom_text_repel and max.overlaps
+  ggtitle("Families driving clustering using BrayCurtis distance and PCoA") +
+  xlab("Axis 1") +
+  ylab("Axis 2") +
+  labs(colour = "SampleID", shape = "Test",
+       subtitle = "Stability & MIX") +
+  theme(plot.title = element_text(size = 12, face = "bold"),
+        plot.subtitle = element_text(size = 10, face = "bold.italic", colour = "firebrick")) #legend.position = "none" off if I want legend
+
+SIC_arrow_MIX
+```
+
+
