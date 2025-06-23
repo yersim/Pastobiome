@@ -1,2 +1,1 @@
-Shotgun metagenomic analysis from JM master thesis. 
-The following R code is available:
+Shotgun metagenomic analysis for the Pastobiome study
