@@ -1,6 +1,6 @@
 ---
 title: "DADA2 16S rRNA sequences Satellite project"
-author: "Simon Yersin"
+author: "Simon Yersin - Jazmine Mote"
 date: '2022-03-08'
 output: pdf_document
 ---
