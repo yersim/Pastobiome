@@ -10,6 +10,6 @@ In the Pastobiome project, we aim at describing the gut microbiota composition a
 Additionally, we are investigating the gut miccrobiota changes in the context of undernutrition in this community.
 
 ## JOHI study:
-Our first study looked at the microbiome composition of 54 fecal samples using 16S rRNA gene amplcion sequencing. Additionally, the microbiota composition was confirmed and the functional profile assessed using 15 samples sent for shotgun metagenomic sequencing.
+Our first study looked at the microbiome composition of 54 fecal samples using 16S rRNA gene amplcion sequencing. Additionally, the microbiota composition was confirmed and the functional profile assessed using 15 samples sent for shotgun metagenomic sequencing. To read and cite this article: Yersin, S., Garneau, J.R., Schneeberger, P.H.H. et al. Gut microbiomes of agropastoral children from the Adadle region of Ethiopia reflect their unique dietary habits. Sci Rep 13, 21342 (2023). https://doi.org/10.1038/s41598-023-47748-8
 
 
