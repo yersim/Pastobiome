@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the paper below."
+title: "Pastobiome: gut microbiota of agropastoral and pastoral children from the Somali Regional State of Ethiopia"
+authors:
+  - family-names: Yersin
+    given-names: Simon
+    orcid: "https://orcid.org/0000-0002-4694-2234"
+preferred-citation:
+  type: article
+  title: "Gut microbiomes of agropastoral children from the Adadle region of Ethiopia reflect their unique dietary habits"
+  authors:
+    - family-names: Yersin
+      given-names: Simon
+    - family-names: Garneau
+      given-names: Julie R.
+    - family-names: Schneeberger
+      given-names: Pierre H. H.
+    # add the remaining authors here, in the same order as the paper
+  journal: "Scientific Reports"
+  volume: 13
+  start: 21342
+  doi: "10.1038/s41598-023-47748-8"
+  year: 2023
