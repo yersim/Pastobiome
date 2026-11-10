@@ -12,10 +12,21 @@ preferred-citation:
     - family-names: Yersin
       given-names: Simon
     - family-names: Garneau
-      given-names: Julie R.
+      given-names: Julian R.
     - family-names: Schneeberger
       given-names: Pierre H. H.
-    # add the remaining authors here, in the same order as the paper
+    - family-names: Osman
+      given-names: Kadra Ali
+    - family-names: Cercamondi
+      given-names: Colin Ivano
+    - family-names: Muhummed
+      given-names: Abdifatah Muktar
+    - family-names: Tschopp
+      given-names: Rea
+    - family-names: Zinsstag
+      given-names: Jakob
+    - family-names: Vonaesch
+      given-names: Pascale
   journal: "Scientific Reports"
   volume: 13
   start: 21342
